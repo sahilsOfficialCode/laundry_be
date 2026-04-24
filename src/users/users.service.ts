@@ -1,38 +1,23 @@
-import { Injectable, ConflictException, OnModuleInit } from '@nestjs/common';
+import { Injectable, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
 import { User, UserDocument, UserRole } from './schemas/user.schema';
 import { CreateUserDto } from './dto/create-user.dto';
-import { ConfigService } from '@nestjs/config';
 
 @Injectable()
-export class UsersService implements OnModuleInit {
+export class UsersService {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
-    private configService: ConfigService,
   ) {}
 
-  async onModuleInit(): Promise<void> {
-    await this.ensureAdminUser();
-  }
-
   async create(createUserDto: CreateUserDto): Promise<any> {
-    return this.createUser(
-      {
-        ...createUserDto,
-        role: UserRole.USER,
-      },
-      UserRole.USER,
-    );
+    return this.createUser(createUserDto);
   }
 
-  private async createUser(
-    createUserDto: CreateUserDto,
-    defaultRole: UserRole,
-  ): Promise<any> {
-    const { email, password, name, role } = createUserDto;
-    
+  private async createUser(createUserDto: CreateUserDto): Promise<any> {
+    const { email, password, name } = createUserDto;
+
     const existingUser = await this.userModel.findOne({ email });
     if (existingUser) {
       throw new ConflictException('Email already in use');
@@ -43,46 +28,15 @@ export class UsersService implements OnModuleInit {
       name,
       email,
       password: hashedPassword,
-      role: role ?? defaultRole,
+      role: UserRole.USER,
     });
 
     const savedUser = await createdUser.save();
-    
+
     // Return user without password
     const userObj = savedUser.toObject() as any;
     delete userObj.password;
     return userObj;
-  }
-
-  private async ensureAdminUser(): Promise<void> {
-    const email = this.configService.get<string>('ADMIN_EMAIL');
-    const password = this.configService.get<string>('ADMIN_PASSWORD');
-    const name =
-      this.configService.get<string>('ADMIN_NAME') ?? 'Laundry Admin';
-
-    if (!email || !password) {
-      return;
-    }
-
-    const existingAdmin = await this.userModel.findOne({ email });
-    if (existingAdmin) {
-      if (existingAdmin.role !== UserRole.ADMIN) {
-        await this.userModel.findByIdAndUpdate(existingAdmin._id, {
-          role: UserRole.ADMIN,
-        });
-      }
-      return;
-    }
-
-    await this.createUser(
-      {
-        name,
-        email,
-        password,
-        role: UserRole.ADMIN,
-      },
-      UserRole.ADMIN,
-    );
   }
 
   async findOneByEmail(email: string): Promise<UserDocument | null> {
