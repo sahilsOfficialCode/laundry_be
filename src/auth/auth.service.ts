@@ -108,4 +108,13 @@ export class AuthService {
       message: 'Password has been reset successfully',
     };
   }
+
+  async verifyToken(token: string) {
+    try {
+      const payload = this.jwtService.verify(token);
+      return { success: true, user: payload };
+    } catch (e) {
+      throw new ForbiddenException('Invalid or expired token');
+    }
+  }
 }
