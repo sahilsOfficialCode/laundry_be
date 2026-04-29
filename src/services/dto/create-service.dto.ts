@@ -1,4 +1,4 @@
-import { IsString, IsNumber, IsOptional, Min } from 'class-validator';
+import { IsBoolean, IsString, IsNumber, IsOptional, Min } from 'class-validator';
 
 export class CreateServiceDto {
   @IsString()
@@ -14,4 +14,8 @@ export class CreateServiceDto {
   @IsOptional()
   @IsString()
   icon?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isAvailable?: boolean;
 }

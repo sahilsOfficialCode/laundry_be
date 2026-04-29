@@ -16,6 +16,9 @@ export class LaundryService {
 
   @Prop({ required: false })
   icon: string;
+
+  @Prop({ default: true })
+  isAvailable: boolean;
 }
 
 export const LaundryServiceSchema = SchemaFactory.createForClass(LaundryService);

@@ -7,6 +7,7 @@ import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { LoggerMiddleware } from './logger.middleware';
 import { ServicesModule } from './services/services.module';
+import { OrdersModule } from './orders/orders.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { ServicesModule } from './services/services.module';
     UsersModule,
     AuthModule,
     ServicesModule,
+    OrdersModule,
   ],
   controllers: [AppController],
   providers: [AppService],
