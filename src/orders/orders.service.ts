@@ -89,6 +89,11 @@ export class OrdersService {
     return this.orderModel.find({ userId }).sort({ createdAt: -1 });
   }
 
+  // ADMIN: Get all orders
+  async findAll() {
+    return this.orderModel.find().sort({ createdAt: -1 });
+  }
+
   // Get single order (owner only)
   async findById(orderId: string, userId: string) {
     const order = await this.orderModel.findOne({

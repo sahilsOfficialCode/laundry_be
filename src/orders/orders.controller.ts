@@ -44,6 +44,18 @@ export class OrdersController {
     return this.ordersService.checkout(user.sub);
   }
 
+  // ADMIN: GET /orders
+  @Get()
+  async getAllOrders(@Req() request: Request) {
+    const user = await this.getUserFromRequest(request);
+
+    if (user.role !== 'admin') {
+      throw new ForbiddenException('Only admin can view all orders');
+    }
+
+    return this.ordersService.findAll();
+  }
+
   // 📄 GET /orders/my
   @Get('my')
   async getMyOrders(@Req() request: Request) {
