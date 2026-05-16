@@ -7,6 +7,7 @@ import { LoggerMiddleware } from './logger.middleware';
 import { ServicesModule } from './services/services.module';
 import { OrdersModule } from './orders/orders.module';
 import { CartModule } from './cart/cart.module';
+import { PaymentsModule } from './payments/payments.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { CartModule } from './cart/cart.module';
     ServicesModule,
     OrdersModule,
     CartModule,
+    PaymentsModule,
   ],
 })
 export class AppModule implements NestModule {

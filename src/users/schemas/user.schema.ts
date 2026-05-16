@@ -26,6 +26,9 @@ export class User {
 
   @Prop()
   passwordResetExpiresAt?: Date;
+
+  @Prop({ default: true })
+  isActive: boolean;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

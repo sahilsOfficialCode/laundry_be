@@ -9,7 +9,25 @@ import { CreateUserDto } from './dto/create-user.dto';
 export class UsersService {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
-  ) {}
+  ) {
+    this.seedAdmin();
+  }
+
+  private async seedAdmin() {
+    const adminCount = await this.userModel.countDocuments({ role: UserRole.ADMIN });
+    if (adminCount === 0) {
+      console.log('Seeding default admin user...');
+      const hashedPassword = await bcrypt.hash('admin123', 10);
+      await this.userModel.create({
+        name: 'Super Admin',
+        email: 'admin@example.com',
+        password: hashedPassword,
+        role: UserRole.ADMIN,
+        isActive: true,
+      });
+      console.log('Default admin user created: admin@example.com / admin123');
+    }
+  }
 
   async create(createUserDto: CreateUserDto): Promise<any> {
     return this.createUser(createUserDto);
@@ -77,5 +95,25 @@ export class UsersService {
   async findById(id: string): Promise<any> {
     const user = await this.userModel.findById(id).select('-password');
     return user;
+  }
+
+  async findAll(): Promise<any[]> {
+    return this.userModel.find().select('-password').sort({ createdAt: -1 });
+  }
+
+  async blockUser(id: string): Promise<any> {
+    return this.userModel.findByIdAndUpdate(
+      id,
+      { isActive: false },
+      { new: true },
+    ).select('-password');
+  }
+
+  async unblockUser(id: string): Promise<any> {
+    return this.userModel.findByIdAndUpdate(
+      id,
+      { isActive: true },
+      { new: true },
+    ).select('-password');
   }
 }

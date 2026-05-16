@@ -3,6 +3,8 @@ import {
   ForbiddenException,
   Injectable,
   UnauthorizedException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
@@ -17,6 +19,7 @@ export class AuthService {
   private readonly passwordResetExpiryMs = 1000 * 60 * 15;
 
   constructor(
+    @Inject(forwardRef(() => UsersService))
     private usersService: UsersService,
     private jwtService: JwtService
   ) {}
