@@ -4,6 +4,9 @@ import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { GetUser } from './decorators/get-user.decorator';
 
 @Controller('auth')
 export class AuthController {
@@ -51,17 +54,8 @@ export class AuthController {
 
   @HttpCode(HttpStatus.OK)
   @Get('me')
-  async me(@Req() request: Request) {
-    let token = request.cookies?.access_token;
-    if (!token && request.headers.authorization) {
-      token = request.headers.authorization.split(' ')[1];
-    }
-    
-    if (!token) {
-      throw new ForbiddenException('No token provided');
-    }
-
-    // Call service to verify. It throws a ForbiddenException if invalid.
-    return this.authService.verifyToken(token);
+  @UseGuards(JwtAuthGuard)
+  async me(@GetUser() user: any) {
+    return user;
   }
 }

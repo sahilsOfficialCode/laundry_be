@@ -26,12 +26,30 @@ export class OrdersService {
     private serviceModel: Model<LaundryServiceDocument>,
   ) {}
 
-  // Create Order
+  // Create Order (legacy/direct)
   async checkout(userId: string) {
+    const order = await this.initiateCheckout(userId);
+    await this.clearCart(userId);
+    return order;
+  }
+
+  // Initiate Checkout (doesn't clear cart)
+  async initiateCheckout(userId: string) {
     //Load cart
+    const cartCount = await this.cartModel.countDocuments();
+    console.log(`[OrdersService] Total carts in DB: ${cartCount}`);
+    console.log(`[OrdersService] Searching for cart with userId: "${userId}" (Type: ${typeof userId})`);
+    
     const cart = await this.cartModel.findOne({ userId });
 
-    if (!cart || cart.items.length === 0) {
+    if (!cart) {
+      const allCarts = await this.cartModel.find().limit(5);
+      console.log(`[OrdersService] No cart found. Sample User IDs in DB:`, allCarts.map(c => c.userId));
+      throw new BadRequestException('Cart is empty');
+    }
+
+    if (cart.items.length === 0) {
+      console.log(`[OrdersService] Cart found but items are empty for userId: ${userId}`);
       throw new BadRequestException('Cart is empty');
     }
 
@@ -56,6 +74,8 @@ export class OrdersService {
 
         return {
           serviceId: item.serviceId,
+          serviceName: service.name,
+          icon: service.icon,
           quantity: item.quantity,
           price: service.price, 
         };
@@ -76,12 +96,11 @@ export class OrdersService {
       status: OrderStatus.ORDER_PLACED,
     });
 
-    const savedOrder = await order.save();
+    return order.save();
+  }
 
-    // Clear cart
+  async clearCart(userId: string) {
     await this.cartModel.updateOne({ userId }, { items: [], totalAmount: 0 });
-
-    return savedOrder;
   }
 
   // Get all orders for user
@@ -89,9 +108,26 @@ export class OrdersService {
     return this.orderModel.find({ userId }).sort({ createdAt: -1 });
   }
 
-  // ADMIN: Get all orders
-  async findAll() {
-    return this.orderModel.find().sort({ createdAt: -1 });
+  // ADMIN: Get all orders (paginated)
+  async findAll(page: number = 1, limit: number = 10, status?: OrderStatus) {
+    const skip = (page - 1) * limit;
+    const filter = status ? { status } : {};
+    
+    const [data, total] = await Promise.all([
+      this.orderModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      this.orderModel.countDocuments(filter),
+    ]);
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+    };
   }
 
   // Get single order (owner only)
