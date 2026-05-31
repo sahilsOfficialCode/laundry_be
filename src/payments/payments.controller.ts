@@ -11,8 +11,10 @@ import { OrdersService } from '../orders/orders.service';
 import { AuthService } from '../auth/auth.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Order, OrderDocument, PaymentStatus } from '../orders/schemas/order.schema';
+import { Order, OrderDocument } from '../orders/schemas/order.schema';
 import type { Request } from 'express';
+import { CheckoutContextDto } from '../orders/dto/checkout.dto';
+import { PaymentMethod } from '../locations/schemas/location.schema';
 
 @Controller('payments')
 export class PaymentsController {
@@ -40,12 +42,19 @@ export class PaymentsController {
   }
 
   @Post('create-order')
-  async createOrder(@Body() body: any, @Req() request: Request) {
+  async createOrder(@Body() body: CheckoutContextDto, @Req() request: Request) {
     const user = await this.getUserFromRequest(request);
     const userId = user.sub;
-    // We initiate the checkout but don't clear the cart yet?
-    // Or we just calculate the total from the cart.
-    const order = await this.ordersService.initiateCheckout(userId);
+    const order = await this.ordersService.createOrderFromCheckout(userId, body);
+
+    if (body.paymentMethod === PaymentMethod.CASH_ON_DELIVERY) {
+      return {
+        orderId: order._id,
+        paymentMethod: body.paymentMethod,
+        success: true,
+        order,
+      };
+    }
     
     const razorpayOrder = await this.paymentsService.createOrder(
       order.totalAmount,
@@ -82,13 +91,21 @@ export class PaymentsController {
       throw new BadRequestException('Order not found');
     }
 
-    order.paymentStatus = PaymentStatus.COMPLETED;
-    order.razorpayPaymentId = razorpayPaymentId;
-    await order.save();
+    if (order.razorpayOrderId !== razorpayOrderId) {
+      throw new BadRequestException('Payment order mismatch');
+    }
 
-    // Now clear the cart
-    await this.ordersService.clearCart(order.userId);
+    const paidOrder = await this.ordersService.markOrderPaid(orderId, {
+      razorpayPaymentId,
+    });
 
-    return { success: true, order };
+    return { success: true, order: paidOrder };
+  }
+
+  @Post('failed')
+  async markFailed(@Body() body: { orderId: string }) {
+    if (!body.orderId) throw new BadRequestException('orderId is required');
+    await this.ordersService.markPaymentFailed(body.orderId);
+    return { success: true };
   }
 }

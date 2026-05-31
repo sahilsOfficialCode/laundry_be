@@ -6,12 +6,15 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
-import { Order, OrderDocument, OrderStatus } from './schemas/order.schema';
+import { Order, OrderDocument, OrderStatus, PaymentStatus } from './schemas/order.schema';
 import { Cart, CartDocument } from '../cart/schemas/cart.schema';
 import {
   LaundryService,
   LaundryServiceDocument,
 } from '../services/schemas/service.schema';
+import { CheckoutContextDto } from './dto/checkout.dto';
+import { LocationsService } from '../locations/locations.service';
+import { PaymentMethod } from '../locations/schemas/location.schema';
 
 @Injectable()
 export class OrdersService {
@@ -24,6 +27,8 @@ export class OrdersService {
 
     @InjectModel(LaundryService.name)
     private serviceModel: Model<LaundryServiceDocument>,
+
+    private locationsService: LocationsService,
   ) {}
 
   // Create Order (legacy/direct)
@@ -35,21 +40,103 @@ export class OrdersService {
 
   // Initiate Checkout (doesn't clear cart)
   async initiateCheckout(userId: string) {
-    //Load cart
-    const cartCount = await this.cartModel.countDocuments();
-    console.log(`[OrdersService] Total carts in DB: ${cartCount}`);
-    console.log(`[OrdersService] Searching for cart with userId: "${userId}" (Type: ${typeof userId})`);
-    
+    const { orderItems, totalAmount } = await this.buildOrderItems(userId);
+
+    const order = new this.orderModel({
+      userId,
+      items: orderItems,
+      totalAmount,
+      status: OrderStatus.ORDER_PLACED,
+    });
+
+    return order.save();
+  }
+
+  async createOrderFromCheckout(userId: string, dto: CheckoutContextDto) {
+    const { orderItems, totalAmount } = await this.buildOrderItems(userId);
+    this.assertAmountMatches(totalAmount, dto.expectedAmount);
+
+    const assignment = await this.locationsService.validateCheckoutContext({
+      serviceType: dto.serviceType,
+      pickupAddress: dto.pickupAddress,
+      selectedShopId: dto.selectedShopId,
+      pickupSlot: dto.pickupSlot,
+      deliverySlot: dto.deliverySlot,
+      paymentMethod: dto.paymentMethod,
+    });
+
+    const status =
+      dto.paymentMethod === PaymentMethod.CASH_ON_DELIVERY
+        ? OrderStatus.ORDER_PLACED
+        : OrderStatus.PENDING_PAYMENT;
+    const paymentStatus =
+      dto.paymentMethod === PaymentMethod.CASH_ON_DELIVERY
+        ? PaymentStatus.PENDING
+        : PaymentStatus.PENDING;
+
+    const order = new this.orderModel({
+      userId,
+      items: orderItems,
+      totalAmount,
+      status,
+      paymentStatus,
+      serviceType: dto.serviceType,
+      assignedShopId: assignment.shop._id.toString(),
+      assignedShopName: assignment.shop.shopName,
+      assignedShopAddress: assignment.shop.fullAddress,
+      distanceKm: assignment.distanceKm,
+      address: dto.pickupAddress?.fullAddress || assignment.shop.fullAddress,
+      pickupAddress: dto.pickupAddress,
+      receptionDetails: dto.receptionDetails,
+      pickupSlot: dto.pickupSlot,
+      deliverySlot: dto.deliverySlot,
+      paymentMethod: dto.paymentMethod,
+    });
+
+    const saved = await order.save();
+
+    if (dto.paymentMethod === PaymentMethod.CASH_ON_DELIVERY) {
+      await this.clearCart(userId);
+    }
+
+    return saved;
+  }
+
+  async markOrderPaid(orderId: string, data: { razorpayPaymentId: string }) {
+    const order = await this.orderModel.findById(orderId);
+    if (!order) throw new BadRequestException('Order not found');
+
+    if (order.paymentStatus === PaymentStatus.COMPLETED) {
+      return order;
+    }
+
+    if (order.status !== OrderStatus.PENDING_PAYMENT) {
+      throw new BadRequestException('Order is not awaiting payment');
+    }
+
+    order.paymentStatus = PaymentStatus.COMPLETED;
+    order.status = OrderStatus.ORDER_PLACED;
+    order.razorpayPaymentId = data.razorpayPaymentId;
+    await order.save();
+    await this.clearCart(order.userId);
+    return order;
+  }
+
+  async markPaymentFailed(orderId: string) {
+    await this.orderModel.findByIdAndUpdate(orderId, {
+      paymentStatus: PaymentStatus.FAILED,
+      status: OrderStatus.CANCELLED,
+    });
+  }
+
+  private async buildOrderItems(userId: string) {
     const cart = await this.cartModel.findOne({ userId });
 
     if (!cart) {
-      const allCarts = await this.cartModel.find().limit(5);
-      console.log(`[OrdersService] No cart found. Sample User IDs in DB:`, allCarts.map(c => c.userId));
       throw new BadRequestException('Cart is empty');
     }
 
     if (cart.items.length === 0) {
-      console.log(`[OrdersService] Cart found but items are empty for userId: ${userId}`);
       throw new BadRequestException('Cart is empty');
     }
 
@@ -82,21 +169,18 @@ export class OrdersService {
       }),
     );
 
-    // Calculate total
     const totalAmount = orderItems.reduce(
       (sum, item) => sum + item.price * item.quantity,
       0,
     );
 
-    // Create order
-    const order = new this.orderModel({
-      userId,
-      items: orderItems,
-      totalAmount,
-      status: OrderStatus.ORDER_PLACED,
-    });
+    return { orderItems, totalAmount };
+  }
 
-    return order.save();
+  private assertAmountMatches(totalAmount: number, expectedAmount: number) {
+    if (Math.round(totalAmount * 100) !== Math.round(expectedAmount * 100)) {
+      throw new BadRequestException('Payment amount does not match order total');
+    }
   }
 
   async clearCart(userId: string) {
@@ -165,6 +249,10 @@ export class OrdersService {
     const transitions: Record<OrderStatus, OrderStatus[]> = {
       [OrderStatus.ORDER_PLACED]: [
         OrderStatus.PICKUP_ASSIGNED,
+        OrderStatus.CANCELLED,
+      ],
+      [OrderStatus.PENDING_PAYMENT]: [
+        OrderStatus.ORDER_PLACED,
         OrderStatus.CANCELLED,
       ],
       [OrderStatus.PICKUP_ASSIGNED]: [OrderStatus.PROCESSING],

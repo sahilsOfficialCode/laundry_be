@@ -3,6 +3,7 @@ import { Document } from 'mongoose';
 
 export type OrderDocument = Order & Document;
 export enum OrderStatus {
+  PENDING_PAYMENT = 'PENDING_PAYMENT',
   ORDER_PLACED = 'ORDER_PLACED',
   PICKUP_ASSIGNED = 'PICKUP_ASSIGNED',
   PROCESSING = 'PROCESSING',
@@ -15,6 +16,7 @@ export enum PaymentStatus {
   PENDING = 'PENDING',
   COMPLETED = 'COMPLETED',
   FAILED = 'FAILED',
+  CANCELLED = 'CANCELLED',
 }
 
 @Schema({ timestamps: true })
@@ -44,6 +46,39 @@ export class Order {
   address?: string;
 
   @Prop()
+  serviceType?: string;
+
+  @Prop()
+  assignedShopId?: string;
+
+  @Prop()
+  assignedShopName?: string;
+
+  @Prop()
+  assignedShopAddress?: string;
+
+  @Prop()
+  distanceKm?: number;
+
+  @Prop({ type: Object })
+  pickupAddress?: Record<string, unknown>;
+
+  @Prop({ type: Object })
+  receptionDetails?: Record<string, unknown>;
+
+  @Prop({ type: Object })
+  pickupSlot?: Record<string, unknown>;
+
+  @Prop({ type: Object })
+  deliverySlot?: Record<string, unknown>;
+
+  @Prop()
+  paymentMethod?: string;
+
+  @Prop()
+  paymentAttemptId?: string;
+
+  @Prop()
   razorpayOrderId?: string;
 
   @Prop()
@@ -51,3 +86,6 @@ export class Order {
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);
+OrderSchema.index({ userId: 1, paymentStatus: 1, razorpayOrderId: 1 });
+OrderSchema.index({ assignedShopId: 1, 'pickupSlot.date': 1, 'pickupSlot.label': 1 });
+OrderSchema.index({ assignedShopId: 1, 'deliverySlot.date': 1, 'deliverySlot.label': 1 });

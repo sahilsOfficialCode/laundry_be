@@ -12,6 +12,7 @@ import {
 import { OrdersService } from './orders.service';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { OrderStatus } from './schemas/order.schema';
+import { CheckoutContextDto } from './dto/checkout.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -27,7 +28,10 @@ export class OrdersController {
 
   // 🔥 POST /orders/checkout
   @Post('checkout')
-  async checkout(@GetUser() user: any) {
+  async checkout(@GetUser() user: any, @Body() dto?: CheckoutContextDto) {
+    if (dto?.serviceType) {
+      return this.ordersService.createOrderFromCheckout(user.sub, dto);
+    }
     return this.ordersService.checkout(user.sub);
   }
 
