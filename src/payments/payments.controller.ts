@@ -13,6 +13,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Order, OrderDocument, PaymentStatus } from '../orders/schemas/order.schema';
 import type { Request } from 'express';
+import { CheckoutContextDto } from '../orders/dto/checkout-context.dto';
 
 @Controller('payments')
 export class PaymentsController {
@@ -40,12 +41,12 @@ export class PaymentsController {
   }
 
   @Post('create-order')
-  async createOrder(@Body() body: any, @Req() request: Request) {
+  async createOrder(@Body() body: CheckoutContextDto, @Req() request: Request) {
     const user = await this.getUserFromRequest(request);
     const userId = user.sub;
     // We initiate the checkout but don't clear the cart yet?
     // Or we just calculate the total from the cart.
-    const order = await this.ordersService.initiateCheckout(userId);
+    const order = await this.ordersService.initiateCheckout(userId, body);
     
     const razorpayOrder = await this.paymentsService.createOrder(
       order.totalAmount,

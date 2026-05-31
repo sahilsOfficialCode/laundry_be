@@ -2,6 +2,7 @@ import { Injectable, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { User, UserDocument, UserRole } from './schemas/user.schema';
 import { CreateUserDto } from './dto/create-user.dto';
 
@@ -58,7 +59,48 @@ export class UsersService {
   }
 
   async findOneByEmail(email: string): Promise<UserDocument | null> {
+    if (!email.trim()) {
+      return null;
+    }
+
     return this.userModel.findOne({ email });
+  }
+
+  async findOneByMobile(mobileNumber: string): Promise<UserDocument | null> {
+    if (!mobileNumber.trim()) {
+      return null;
+    }
+
+    return this.userModel.findOne({ mobileNumber });
+  }
+
+  async createMobileUser(
+    mobileNumber: string,
+    name?: string,
+  ): Promise<UserDocument> {
+    const existingUser = await this.findOneByMobile(mobileNumber);
+    if (existingUser) {
+      return existingUser;
+    }
+
+    const randomPassword = crypto.randomBytes(16).toString('hex');
+    const hashedPassword = await bcrypt.hash(randomPassword, 10);
+    const createdUser = new this.userModel({
+      name: name?.trim() ? name.trim() : 'Laundry Customer',
+      mobileNumber,
+      password: hashedPassword,
+      role: UserRole.USER,
+    });
+
+    try {
+      return await createdUser.save();
+    } catch (_) {
+      const user = await this.findOneByMobile(mobileNumber);
+      if (user) {
+        return user;
+      }
+      throw new ConflictException('Unable to create user with this mobile number');
+    }
   }
 
   async setPasswordResetToken(

@@ -8,6 +8,7 @@ import {
 } from './schemas/conversation.schema';
 import { Message, MessageSchema } from './schemas/message.schema';
 import { SupportController } from './support.controller';
+import { SupportEventsService } from './support-events.service';
 import { SupportService } from './support.service';
 import { SupportGateway } from './support.gateway';
 
@@ -21,7 +22,7 @@ import { SupportGateway } from './support.gateway';
     AuthModule,
   ],
   controllers: [SupportController],
-  providers: [SupportService, SupportGateway],
+  providers: [SupportService, SupportEventsService, SupportGateway],
   exports: [SupportService],
 })
 export class SupportModule {}

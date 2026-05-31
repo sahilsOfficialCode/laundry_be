@@ -22,6 +22,17 @@ export class Order {
   @Prop({ required: true })
   userId: string;
 
+  @Prop({ required: false, index: true })
+  locationId?: string;
+
+  @Prop({ type: Object, required: false })
+  locationSnapshot?: {
+    shopName?: string;
+    fullAddress?: string;
+    contactNumber?: string;
+    city?: string;
+  };
+
   @Prop({ type: [{ serviceId: String, serviceName: String, icon: String, quantity: Number, price: Number }] })
   items: { 
     serviceId: string; 
@@ -43,6 +54,21 @@ export class Order {
   @Prop()
   address?: string;
 
+  @Prop({ required: false })
+  pickupDate?: Date;
+
+  @Prop({ required: false })
+  pickupSlot?: string;
+
+  @Prop({ required: false })
+  deliverySlot?: string;
+
+  @Prop({ required: false })
+  pickupTime?: string;
+
+  @Prop({ type: [Number], required: false })
+  pickupCoordinates?: [number, number];
+
   @Prop()
   razorpayOrderId?: string;
 
@@ -51,3 +77,5 @@ export class Order {
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);
+
+OrderSchema.index({ locationId: 1, pickupDate: 1, status: 1 });

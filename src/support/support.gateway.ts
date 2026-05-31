@@ -1,4 +1,5 @@
 import {
+  OnGatewayInit,
   ConnectedSocket,
   MessageBody,
   OnGatewayConnection,
@@ -12,6 +13,7 @@ import { Server, Socket } from 'socket.io';
 import { AuthService } from '../auth/auth.service';
 import { UserRole } from '../users/schemas/user.schema';
 import { SendMessageDto } from './dto/send-message.dto';
+import { SupportEventsService } from './support-events.service';
 import { SupportService } from './support.service';
 
 @WebSocketGateway({
@@ -20,14 +22,21 @@ import { SupportService } from './support.service';
     credentials: true,
   },
 })
-export class SupportGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class SupportGateway
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+{
   @WebSocketServer()
   server: Server;
 
   constructor(
     private readonly authService: AuthService,
     private readonly supportService: SupportService,
+    private readonly supportEvents: SupportEventsService,
   ) {}
+
+  afterInit(server: Server) {
+    this.supportEvents.setServer(server);
+  }
 
   async handleConnection(client: Socket) {
     try {
@@ -58,14 +67,7 @@ export class SupportGateway implements OnGatewayConnection, OnGatewayDisconnect 
   ) {
     const user = this.requireSocketUser(client);
     const result = await this.supportService.sendMessage(user, payload);
-
-    this.server
-      .to(this.userRoom(result.conversation.userId))
-      .emit('support:new_message', result);
-    this.server.to('admins').emit('support:new_message', result);
-    this.server
-      .to('admins')
-      .emit('support:conversation_updated', result.conversation);
+    this.supportEvents.emitNewMessage(result);
 
     return result;
   }
@@ -80,13 +82,41 @@ export class SupportGateway implements OnGatewayConnection, OnGatewayDisconnect 
       payload.conversationId,
       user,
     );
-
-    this.server
-      .to(this.userRoom(conversation.userId))
-      .to('admins')
-      .emit('support:messages_read', conversation);
+    this.supportEvents.emitMessagesRead(conversation);
 
     return conversation;
+  }
+
+  @SubscribeMessage('support:typing')
+  async handleTyping(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { conversationId?: string; isTyping?: boolean },
+  ) {
+    const user = this.requireSocketUser(client);
+
+    const conversation =
+      user.role === UserRole.ADMIN
+        ? await this.supportService.getAuthorizedConversation(
+            payload.conversationId ?? '',
+            user,
+          )
+        : await this.supportService.getUserConversation(user);
+
+    const normalized = {
+      conversationId: String(conversation._id),
+      senderRole: user.role,
+      isTyping: Boolean(payload.isTyping),
+    };
+
+    if (user.role === UserRole.ADMIN) {
+      this.server
+        .to(this.userRoom(conversation.userId))
+        .emit('support:typing', normalized);
+      return normalized;
+    }
+
+    this.server.to('admins').emit('support:typing', normalized);
+    return normalized;
   }
 
   private extractToken(client: Socket) {

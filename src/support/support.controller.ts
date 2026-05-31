@@ -14,12 +14,16 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { UserRole } from '../users/schemas/user.schema';
 import { SendMessageDto } from './dto/send-message.dto';
+import { SupportEventsService } from './support-events.service';
 import { SupportService } from './support.service';
 
 @Controller('support')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class SupportController {
-  constructor(private readonly supportService: SupportService) {}
+  constructor(
+    private readonly supportService: SupportService,
+    private readonly supportEvents: SupportEventsService,
+  ) {}
 
   @Get('conversation')
   async getMyConversation(@GetUser() user: any) {
@@ -52,7 +56,9 @@ export class SupportController {
 
   @Post('messages')
   async sendMessage(@GetUser() user: any, @Body() dto: SendMessageDto) {
-    return this.supportService.sendMessage(user, dto);
+    const result = await this.supportService.sendMessage(user, dto);
+    this.supportEvents.emitNewMessage(result);
+    return result;
   }
 
   @Patch('conversations/:id/read')
@@ -60,6 +66,11 @@ export class SupportController {
     @Param('id') conversationId: string,
     @GetUser() user: any,
   ) {
-    return this.supportService.markConversationRead(conversationId, user);
+    const conversation = await this.supportService.markConversationRead(
+      conversationId,
+      user,
+    );
+    this.supportEvents.emitMessagesRead(conversation);
+    return conversation;
   }
 }

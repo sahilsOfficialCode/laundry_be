@@ -17,7 +17,8 @@ import { SendMessageDto } from './dto/send-message.dto';
 
 type JwtUser = {
   sub: string;
-  email: string;
+  email?: string;
+  mobileNumber?: string;
   role: UserRole;
 };
 
@@ -196,6 +197,10 @@ export class SupportService {
     }
 
     return updatedConversation;
+  }
+
+  async getAuthorizedConversation(conversationId: string, user: JwtUser) {
+    return this.findAuthorizedConversation(conversationId, user);
   }
 
   private async getOrCreateUserConversation(userId: string) {

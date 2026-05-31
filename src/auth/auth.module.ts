@@ -4,6 +4,9 @@ import { AuthController } from './auth.controller';
 import { UsersModule } from '../users/users.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { SendMobileOtpService } from './services/send-mobile-otp.service';
+import { SMS_PROVIDER } from './sms/sms-provider.token';
+import { ConsoleSmsProvider } from './sms/console-sms.provider';
 
 @Module({
   imports: [
@@ -27,7 +30,14 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
       },
     }),
   ],
-  providers: [AuthService],
+  providers: [
+    AuthService,
+    SendMobileOtpService,
+    {
+      provide: SMS_PROVIDER,
+      useClass: ConsoleSmsProvider,
+    },
+  ],
   controllers: [AuthController],
   exports: [AuthService]
 })

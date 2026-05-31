@@ -9,12 +9,15 @@ import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
 import { UserRole } from '../users/schemas/user.schema';
+import { SendMobileOtpService } from './services/send-mobile-otp.service';
 
 describe('AuthService', () => {
   let service: AuthService;
 
   const usersService = {
     findOneByEmail: jest.fn(),
+    findOneByMobile: jest.fn(),
+    createMobileUser: jest.fn(),
     setPasswordResetToken: jest.fn(),
     findByPasswordResetToken: jest.fn(),
     updatePassword: jest.fn(),
@@ -22,6 +25,10 @@ describe('AuthService', () => {
 
   const jwtService = {
     sign: jest.fn().mockReturnValue('signed-token'),
+  };
+
+  const sendMobileOtpService = {
+    sendOtp: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -37,6 +44,10 @@ describe('AuthService', () => {
         {
           provide: JwtService,
           useValue: jwtService,
+        },
+        {
+          provide: SendMobileOtpService,
+          useValue: sendMobileOtpService,
         },
       ],
     }).compile();
@@ -72,6 +83,7 @@ describe('AuthService', () => {
       user: {
         id: 'user-id',
         email: 'test@example.com',
+        mobileNumber: '',
         name: 'Test User',
         role: UserRole.ADMIN,
       },
@@ -80,6 +92,7 @@ describe('AuthService', () => {
       email: 'test@example.com',
       sub: 'user-id',
       role: UserRole.ADMIN,
+      mobileNumber: undefined,
     });
   });
 

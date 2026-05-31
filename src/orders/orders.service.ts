@@ -12,6 +12,8 @@ import {
   LaundryService,
   LaundryServiceDocument,
 } from '../services/schemas/service.schema';
+import { CheckoutContextDto } from './dto/checkout-context.dto';
+import { LocationsService } from '../locations/locations.service';
 
 @Injectable()
 export class OrdersService {
@@ -24,42 +26,62 @@ export class OrdersService {
 
     @InjectModel(LaundryService.name)
     private serviceModel: Model<LaundryServiceDocument>,
+
+    private readonly locationsService: LocationsService,
   ) {}
 
   // Create Order (legacy/direct)
-  async checkout(userId: string) {
-    const order = await this.initiateCheckout(userId);
+  async checkout(userId: string, context?: CheckoutContextDto) {
+    const order = await this.initiateCheckout(userId, context);
     await this.clearCart(userId);
     return order;
   }
 
   // Initiate Checkout (doesn't clear cart)
-  async initiateCheckout(userId: string) {
-    //Load cart
-    const cartCount = await this.cartModel.countDocuments();
-    console.log(`[OrdersService] Total carts in DB: ${cartCount}`);
-    console.log(`[OrdersService] Searching for cart with userId: "${userId}" (Type: ${typeof userId})`);
-    
+  async initiateCheckout(userId: string, context?: CheckoutContextDto) {
+    const checkoutContext = context ?? {};
+
+    let assignedLocation: any = null;
+    const activeLocationCount = await this.locationsService.countActiveLocations();
+
+    if (
+      checkoutContext.pickupLatitude != null &&
+      checkoutContext.pickupLongitude != null
+    ) {
+      const requestedDate =
+        checkoutContext.pickupDate ?? new Date().toISOString();
+      assignedLocation = await this.locationsService.validateBookingEligibility({
+        latitude: checkoutContext.pickupLatitude,
+        longitude: checkoutContext.pickupLongitude,
+        city: checkoutContext.city,
+        preferredLocationId: checkoutContext.locationId,
+        requestedDate,
+        requestedTime: checkoutContext.pickupTime,
+        pickupSlot: checkoutContext.pickupSlot,
+        deliverySlot: checkoutContext.deliverySlot,
+      });
+    } else if (activeLocationCount > 0) {
+      throw new BadRequestException(
+        'Service not available in your area. Please share pickup address coordinates.',
+      );
+    }
+
+    // Load cart
     const cart = await this.cartModel.findOne({ userId });
 
-    if (!cart) {
-      const allCarts = await this.cartModel.find().limit(5);
-      console.log(`[OrdersService] No cart found. Sample User IDs in DB:`, allCarts.map(c => c.userId));
+    if (!cart || cart.items.length === 0) {
       throw new BadRequestException('Cart is empty');
     }
 
-    if (cart.items.length === 0) {
-      console.log(`[OrdersService] Cart found but items are empty for userId: ${userId}`);
-      throw new BadRequestException('Cart is empty');
-    }
-
-    // Validate + transform items (ONLY schema fields)
+    // Validate + transform items
     const orderItems = await Promise.all(
       cart.items.map(async (item) => {
         const service = await this.serviceModel.findById(item.serviceId);
 
         if (!service) {
-          throw new NotFoundException(`Service not found: ${item.serviceId.toString()}`);
+          throw new NotFoundException(
+            `Service not found: ${item.serviceId.toString()}`,
+          );
         }
 
         if (!service.isAvailable) {
@@ -77,7 +99,7 @@ export class OrdersService {
           serviceName: service.name,
           icon: service.icon,
           quantity: item.quantity,
-          price: service.price, 
+          price: service.price,
         };
       }),
     );
@@ -94,6 +116,29 @@ export class OrdersService {
       items: orderItems,
       totalAmount,
       status: OrderStatus.ORDER_PLACED,
+      locationId: assignedLocation?._id?.toString(),
+      locationSnapshot: assignedLocation
+        ? {
+            shopName: assignedLocation.shopName,
+            fullAddress: assignedLocation.fullAddress,
+            contactNumber: assignedLocation.contactNumber,
+            city: assignedLocation.city,
+          }
+        : undefined,
+      address: checkoutContext.address,
+      pickupDate: checkoutContext.pickupDate
+        ? new Date(checkoutContext.pickupDate)
+        : assignedLocation
+          ? new Date()
+          : undefined,
+      pickupSlot: checkoutContext.pickupSlot,
+      deliverySlot: checkoutContext.deliverySlot,
+      pickupTime: checkoutContext.pickupTime,
+      pickupCoordinates:
+        checkoutContext.pickupLatitude != null &&
+        checkoutContext.pickupLongitude != null
+          ? [checkoutContext.pickupLongitude, checkoutContext.pickupLatitude]
+          : undefined,
     });
 
     return order.save();
@@ -112,13 +157,9 @@ export class OrdersService {
   async findAll(page: number = 1, limit: number = 10, status?: OrderStatus) {
     const skip = (page - 1) * limit;
     const filter = status ? { status } : {};
-    
+
     const [data, total] = await Promise.all([
-      this.orderModel
-        .find(filter)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
+      this.orderModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
       this.orderModel.countDocuments(filter),
     ]);
 

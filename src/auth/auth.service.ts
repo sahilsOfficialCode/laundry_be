@@ -13,23 +13,43 @@ import * as crypto from 'crypto';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { SendMobileOtpDto } from './dto/send-mobile-otp.dto';
+import { VerifyMobileOtpDto } from './dto/verify-mobile-otp.dto';
+import { SendMobileOtpService } from './services/send-mobile-otp.service';
 
 @Injectable()
 export class AuthService {
   private readonly passwordResetExpiryMs = 1000 * 60 * 15;
+  private readonly mobileOtpExpiryMs = 1000 * 60 * 5;
+  private readonly maxOtpAttempts = 5;
+  private readonly mobileOtpStore = new Map<
+    string,
+    {
+      otpHash: string;
+      expiresAt: number;
+      attempts: number;
+      requestedName?: string;
+    }
+  >();
 
   constructor(
     @Inject(forwardRef(() => UsersService))
     private usersService: UsersService,
-    private jwtService: JwtService
+    private jwtService: JwtService,
+    private sendMobileOtpService: SendMobileOtpService,
   ) {}
 
   async validateUser(email: string, pass: string): Promise<any> {
     const user = await this.usersService.findOneByEmail(email);
-    if (user && (await bcrypt.compare(pass, user.password))) {
+    if (!user?.password) {
+      return null;
+    }
+
+    if (await bcrypt.compare(pass, user.password)) {
       const { password, ...result } = user.toObject();
       return result;
     }
+
     return null;
   }
 
@@ -44,17 +64,70 @@ export class AuthService {
         `This account does not have ${userDto.role} access`,
       );
     }
-    
-    const payload = { email: user.email, sub: user._id, role: user.role };
+
+    return this.buildAuthResponse(user);
+  }
+
+  async sendMobileOtp(sendMobileOtpDto: SendMobileOtpDto) {
+    const mobileNumber = this.normalizeMobileNumber(sendMobileOtpDto.mobileNumber);
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const otpHash = this.hashValue(otp);
+
+    this.mobileOtpStore.set(mobileNumber, {
+      otpHash,
+      expiresAt: Date.now() + this.mobileOtpExpiryMs,
+      attempts: 0,
+      requestedName: sendMobileOtpDto.name?.trim(),
+    });
+
+    await this.sendMobileOtpService.sendOtp({
+      mobileNumber,
+      otp,
+    });
+
     return {
-      access_token: this.jwtService.sign(payload),
-      user: {
-        id: user._id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-      },
+      message: 'OTP sent successfully',
+      mobileNumber,
+      expiresInSeconds: Math.floor(this.mobileOtpExpiryMs / 1000),
     };
+  }
+
+  async verifyMobileOtp(verifyMobileOtpDto: VerifyMobileOtpDto) {
+    const mobileNumber = this.normalizeMobileNumber(verifyMobileOtpDto.mobileNumber);
+    const record = this.mobileOtpStore.get(mobileNumber);
+
+    if (!record) {
+      throw new UnauthorizedException('No OTP request found for this mobile number');
+    }
+
+    if (Date.now() > record.expiresAt) {
+      this.mobileOtpStore.delete(mobileNumber);
+      throw new UnauthorizedException('OTP has expired. Please request a new one');
+    }
+
+    const receivedOtpHash = this.hashValue(verifyMobileOtpDto.otp);
+    if (record.otpHash !== receivedOtpHash) {
+      record.attempts += 1;
+      if (record.attempts >= this.maxOtpAttempts) {
+        this.mobileOtpStore.delete(mobileNumber);
+        throw new UnauthorizedException('Too many incorrect OTP attempts. Request a new OTP');
+      }
+
+      this.mobileOtpStore.set(mobileNumber, record);
+      throw new UnauthorizedException('Invalid OTP');
+    }
+
+    this.mobileOtpStore.delete(mobileNumber);
+
+    const user =
+      (await this.usersService.findOneByMobile(mobileNumber)) ||
+      (await this.usersService.createMobileUser(
+        mobileNumber,
+        verifyMobileOtpDto.name?.trim() || record.requestedName,
+      ));
+
+    const sanitizedUser = user.toObject ? user.toObject() : user;
+    return this.buildAuthResponse(sanitizedUser);
   }
 
   async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {
@@ -119,5 +192,39 @@ export class AuthService {
     } catch (e) {
       throw new ForbiddenException('Invalid or expired token');
     }
+  }
+
+  private buildAuthResponse(user: any) {
+    const userId = String(user._id ?? user.id ?? '');
+    const payload = {
+      sub: userId,
+      role: user.role,
+      email: user.email,
+      mobileNumber: user.mobileNumber,
+    };
+
+    return {
+      access_token: this.jwtService.sign(payload),
+      user: {
+        id: userId,
+        email: user.email ?? '',
+        mobileNumber: user.mobileNumber ?? '',
+        name: user.name,
+        role: user.role,
+      },
+    };
+  }
+
+  private normalizeMobileNumber(value: string): string {
+    const normalized = value.trim();
+    if (!/^\+?[0-9]{10,15}$/.test(normalized)) {
+      throw new BadRequestException('Invalid mobile number format');
+    }
+
+    return normalized;
+  }
+
+  private hashValue(value: string): string {
+    return crypto.createHash('sha256').update(value).digest('hex');
   }
 }
