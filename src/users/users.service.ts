@@ -1,4 +1,8 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
@@ -8,16 +12,15 @@ import { CreateUserDto } from './dto/create-user.dto';
 
 @Injectable()
 export class UsersService {
-  constructor(
-    @InjectModel(User.name) private userModel: Model<UserDocument>,
-  ) {
+  constructor(@InjectModel(User.name) private userModel: Model<UserDocument>) {
     this.seedAdmin();
   }
 
   private async seedAdmin() {
-    const adminCount = await this.userModel.countDocuments({ role: UserRole.ADMIN });
+    const adminCount = await this.userModel.countDocuments({
+      role: UserRole.ADMIN,
+    });
     if (adminCount === 0) {
-      console.log('Seeding default admin user...');
       const hashedPassword = await bcrypt.hash('admin123', 10);
       await this.userModel.create({
         name: 'Super Admin',
@@ -85,22 +88,39 @@ export class UsersService {
 
     const randomPassword = crypto.randomBytes(16).toString('hex');
     const hashedPassword = await bcrypt.hash(randomPassword, 10);
-    const createdUser = new this.userModel({
-      name: name?.trim() ? name.trim() : 'Laundry Customer',
-      mobileNumber,
-      password: hashedPassword,
-      role: UserRole.USER,
-    });
+    const userName = name?.trim() ? name.trim() : 'Laundry Customer';
 
     try {
-      return await createdUser.save();
-    } catch (_) {
+      const user = await this.userModel.findOneAndUpdate(
+        { mobileNumber },
+        {
+          $setOnInsert: {
+            name: userName,
+            mobileNumber,
+            password: hashedPassword,
+            role: UserRole.USER,
+            isActive: true,
+          },
+        },
+        {
+          new: true,
+          upsert: true,
+          setDefaultsOnInsert: true,
+        },
+      );
+      if (user) {
+        return user;
+      }
+    } catch (error) {
       const user = await this.findOneByMobile(mobileNumber);
       if (user) {
         return user;
       }
-      throw new ConflictException('Unable to create user with this mobile number');
     }
+
+    throw new ConflictException(
+      'Unable to create user with this mobile number',
+    );
   }
 
   async setPasswordResetToken(
@@ -138,23 +158,36 @@ export class UsersService {
     return this.userModel.findById(id).select('-password');
   }
 
+  async updateProfileName(userId: string, name?: string): Promise<any> {
+    const trimmedName = name?.trim();
+    if (!trimmedName) {
+      throw new BadRequestException('Name is required');
+    }
+
+    return this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { name: trimmedName },
+        {
+          new: true,
+        },
+      )
+      .select('-password');
+  }
+
   async findAll(): Promise<any[]> {
     return this.userModel.find().select('-password').sort({ createdAt: -1 });
   }
 
   async blockUser(id: string): Promise<any> {
-    return this.userModel.findByIdAndUpdate(
-      id,
-      { isActive: false },
-      { new: true },
-    ).select('-password');
+    return this.userModel
+      .findByIdAndUpdate(id, { isActive: false }, { new: true })
+      .select('-password');
   }
 
   async unblockUser(id: string): Promise<any> {
-    return this.userModel.findByIdAndUpdate(
-      id,
-      { isActive: true },
-      { new: true },
-    ).select('-password');
+    return this.userModel
+      .findByIdAndUpdate(id, { isActive: true }, { new: true })
+      .select('-password');
   }
 }

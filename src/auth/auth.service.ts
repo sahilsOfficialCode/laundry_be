@@ -28,7 +28,7 @@ export class AuthService {
       otpHash: string;
       expiresAt: number;
       attempts: number;
-      requestedName?: string;
+      isNewUser: boolean;
     }
   >();
 
@@ -69,7 +69,12 @@ export class AuthService {
   }
 
   async sendMobileOtp(sendMobileOtpDto: SendMobileOtpDto) {
-    const mobileNumber = this.normalizeMobileNumber(sendMobileOtpDto.mobileNumber);
+    const mobileNumber = this.normalizeMobileNumber(
+      sendMobileOtpDto.mobileNumber,
+    );
+    const existingUser = await this.usersService.findOneByMobile(mobileNumber);
+    const isNewUser = !existingUser;
+
     const otp = crypto.randomInt(100000, 1000000).toString();
     const otpHash = this.hashValue(otp);
 
@@ -77,7 +82,7 @@ export class AuthService {
       otpHash,
       expiresAt: Date.now() + this.mobileOtpExpiryMs,
       attempts: 0,
-      requestedName: sendMobileOtpDto.name?.trim(),
+      isNewUser,
     });
 
     await this.sendMobileOtpService.sendOtp({
@@ -87,23 +92,29 @@ export class AuthService {
     console.log(`OTP for ${mobileNumber}: ${otp} (valid for 5 minutes)`);
 
     return {
-      message: 'OTP sent successfully',
-      mobileNumber,
-      expiresInSeconds: Math.floor(this.mobileOtpExpiryMs / 1000),
+      success: true,
+      isNewUser,
+      name: existingUser?.name ?? null,
     };
   }
 
   async verifyMobileOtp(verifyMobileOtpDto: VerifyMobileOtpDto) {
-    const mobileNumber = this.normalizeMobileNumber(verifyMobileOtpDto.mobileNumber);
+    const mobileNumber = this.normalizeMobileNumber(
+      verifyMobileOtpDto.mobileNumber,
+    );
     const record = this.mobileOtpStore.get(mobileNumber);
 
     if (!record) {
-      throw new UnauthorizedException('No OTP request found for this mobile number');
+      throw new UnauthorizedException(
+        'No OTP request found for this mobile number',
+      );
     }
 
     if (Date.now() > record.expiresAt) {
       this.mobileOtpStore.delete(mobileNumber);
-      throw new UnauthorizedException('OTP has expired. Please request a new one');
+      throw new UnauthorizedException(
+        'OTP has expired. Please request a new one',
+      );
     }
 
     const receivedOtpHash = this.hashValue(verifyMobileOtpDto.otp);
@@ -111,52 +122,43 @@ export class AuthService {
       record.attempts += 1;
       if (record.attempts >= this.maxOtpAttempts) {
         this.mobileOtpStore.delete(mobileNumber);
-        throw new UnauthorizedException('Too many incorrect OTP attempts. Request a new OTP');
+        throw new UnauthorizedException(
+          'Too many incorrect OTP attempts. Request a new OTP',
+        );
       }
 
       this.mobileOtpStore.set(mobileNumber, record);
       throw new UnauthorizedException('Invalid OTP');
     }
 
-    const existingUser = await this.usersService.findOneByMobile(mobileNumber);
-    if (existingUser) {
-      this.mobileOtpStore.delete(mobileNumber);
-      const sanitizedUser = existingUser.toObject
-        ? existingUser.toObject()
-        : existingUser;
+    let user = await this.usersService.findOneByMobile(mobileNumber);
 
-      return {
-        ...this.buildAuthResponse(sanitizedUser),
-        isName: false,
-      };
+    if (record.isNewUser) {
+      const name = verifyMobileOtpDto.name?.trim();
+      if (!name) {
+        throw new BadRequestException('Name is required');
+      }
+
+      user = await this.usersService.createMobileUser(mobileNumber, name);
     }
 
-    const providedName =
-      verifyMobileOtpDto.name?.trim() || record.requestedName?.trim();
-    if (!providedName) {
-      return {
-        isName: true,
-        mobileNumber,
-        message: 'Name is required to complete mobile signup',
-      };
+    if (!user) {
+      throw new UnauthorizedException('User not found');
     }
 
     this.mobileOtpStore.delete(mobileNumber);
 
-    const user = await this.usersService.createMobileUser(
-      mobileNumber,
-      providedName,
-    );
-
     const sanitizedUser = user.toObject ? user.toObject() : user;
     return {
       ...this.buildAuthResponse(sanitizedUser),
-      isName: false,
+      isNewUser: record.isNewUser,
     };
   }
 
   async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {
-    const user = await this.usersService.findOneByEmail(forgotPasswordDto.email);
+    const user = await this.usersService.findOneByEmail(
+      forgotPasswordDto.email,
+    );
 
     if (!user) {
       return {
@@ -192,9 +194,8 @@ export class AuthService {
       .update(resetPasswordDto.token)
       .digest('hex');
 
-    const user = await this.usersService.findByPasswordResetToken(
-      hashedResetToken,
-    );
+    const user =
+      await this.usersService.findByPasswordResetToken(hashedResetToken);
 
     if (!user) {
       throw new BadRequestException('Reset token is invalid or has expired');
@@ -228,8 +229,12 @@ export class AuthService {
       mobileNumber: user.mobileNumber,
     };
 
+    const token = this.jwtService.sign(payload);
+
     return {
-      access_token: this.jwtService.sign(payload),
+      success: true,
+      access_token: token,
+      token,
       user: {
         id: userId,
         email: user.email ?? '',

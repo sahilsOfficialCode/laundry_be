@@ -18,6 +18,7 @@ describe('AuthService', () => {
     findOneByEmail: jest.fn(),
     findOneByMobile: jest.fn(),
     createMobileUser: jest.fn(),
+    updateProfileName: jest.fn(),
     setPasswordResetToken: jest.fn(),
     findByPasswordResetToken: jest.fn(),
     updatePassword: jest.fn(),
@@ -79,7 +80,9 @@ describe('AuthService', () => {
     });
 
     expect(result).toEqual({
+      success: true,
       access_token: 'signed-token',
+      token: 'signed-token',
       user: {
         id: 'user-id',
         email: 'test@example.com',
@@ -197,7 +200,62 @@ describe('AuthService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('verifies mobile OTP for an existing user and returns isName false', async () => {
+  it('sends mobile OTP for an existing user with isNewUser false and name', async () => {
+    usersService.findOneByMobile.mockResolvedValue({
+      _id: 'user-id',
+      mobileNumber: '+919876543210',
+      name: 'John Doe',
+      role: UserRole.USER,
+    });
+
+    const result = await service.sendMobileOtp({
+      mobileNumber: '+919876543210',
+    });
+
+    expect(sendMobileOtpService.sendOtp).toHaveBeenCalledWith({
+      mobileNumber: '+919876543210',
+      otp: expect.stringMatching(/^[0-9]{6}$/),
+    });
+    expect(result).toEqual({
+      success: true,
+      isNewUser: false,
+      name: 'John Doe',
+    });
+    expect(usersService.createMobileUser).not.toHaveBeenCalled();
+  });
+
+  it('sends mobile OTP for a missing user with isNewUser true and null name', async () => {
+    usersService.findOneByMobile.mockResolvedValue(null);
+
+    const result = await service.sendMobileOtp({
+      mobileNumber: '+919876543210',
+    });
+
+    expect(sendMobileOtpService.sendOtp).toHaveBeenCalledWith({
+      mobileNumber: '+919876543210',
+      otp: expect.stringMatching(/^[0-9]{6}$/),
+    });
+    expect(result).toEqual({
+      success: true,
+      isNewUser: true,
+      name: null,
+    });
+    expect(usersService.createMobileUser).not.toHaveBeenCalled();
+  });
+
+  it('verifies mobile OTP for an existing user and returns isNewUser false', async () => {
+    usersService.findOneByMobile.mockResolvedValue({
+      _id: 'user-id',
+      mobileNumber: '+919876543210',
+      name: 'Test User',
+      role: UserRole.USER,
+      toObject: () => ({
+        _id: 'user-id',
+        mobileNumber: '+919876543210',
+        name: 'Test User',
+        role: UserRole.USER,
+      }),
+    });
     await service.sendMobileOtp({ mobileNumber: '+919876543210' });
     const otp = sendMobileOtpService.sendOtp.mock.calls[0][0].otp;
     usersService.findOneByMobile.mockResolvedValue({
@@ -219,8 +277,10 @@ describe('AuthService', () => {
     });
 
     expect(result).toEqual({
+      success: true,
       access_token: 'signed-token',
-      isName: false,
+      token: 'signed-token',
+      isNewUser: false,
       user: {
         id: 'user-id',
         email: '',
@@ -232,29 +292,23 @@ describe('AuthService', () => {
     expect(usersService.createMobileUser).not.toHaveBeenCalled();
   });
 
-  it('returns isName true when a verified mobile OTP has no matching user or name', async () => {
+  it('rejects new mobile OTP verification when name is missing', async () => {
+    usersService.findOneByMobile.mockResolvedValueOnce(null);
     await service.sendMobileOtp({ mobileNumber: '+919876543210' });
     const otp = sendMobileOtpService.sendOtp.mock.calls[0][0].otp;
     usersService.findOneByMobile.mockResolvedValue(null);
 
-    const result = await service.verifyMobileOtp({
-      mobileNumber: '+919876543210',
-      otp,
-    });
-
-    expect(result).toEqual({
-      isName: true,
-      mobileNumber: '+919876543210',
-      message: 'Name is required to complete mobile signup',
-    });
+    await expect(
+      service.verifyMobileOtp({
+        mobileNumber: '+919876543210',
+        otp,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
     expect(usersService.createMobileUser).not.toHaveBeenCalled();
   });
 
-  it('creates a mobile user and returns isName false when name is provided', async () => {
-    await service.sendMobileOtp({ mobileNumber: '+919876543210' });
-    const otp = sendMobileOtpService.sendOtp.mock.calls[0][0].otp;
-    usersService.findOneByMobile.mockResolvedValue(null);
-    usersService.createMobileUser.mockResolvedValue({
+  it('creates a mobile user after OTP verification and returns isNewUser true', async () => {
+    const newUser = {
       _id: 'new-user-id',
       mobileNumber: '+919876543210',
       name: 'New User',
@@ -265,7 +319,12 @@ describe('AuthService', () => {
         name: 'New User',
         role: UserRole.USER,
       }),
-    });
+    };
+    usersService.findOneByMobile.mockResolvedValueOnce(null);
+    usersService.createMobileUser.mockResolvedValue(newUser);
+    await service.sendMobileOtp({ mobileNumber: '+919876543210' });
+    const otp = sendMobileOtpService.sendOtp.mock.calls[0][0].otp;
+    usersService.findOneByMobile.mockResolvedValue(null);
 
     const result = await service.verifyMobileOtp({
       mobileNumber: '+919876543210',
@@ -278,8 +337,10 @@ describe('AuthService', () => {
       'New User',
     );
     expect(result).toEqual({
+      success: true,
       access_token: 'signed-token',
-      isName: false,
+      token: 'signed-token',
+      isNewUser: true,
       user: {
         id: 'new-user-id',
         email: '',
