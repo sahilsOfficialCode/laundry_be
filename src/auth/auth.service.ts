@@ -118,17 +118,41 @@ export class AuthService {
       throw new UnauthorizedException('Invalid OTP');
     }
 
+    const existingUser = await this.usersService.findOneByMobile(mobileNumber);
+    if (existingUser) {
+      this.mobileOtpStore.delete(mobileNumber);
+      const sanitizedUser = existingUser.toObject
+        ? existingUser.toObject()
+        : existingUser;
+
+      return {
+        ...this.buildAuthResponse(sanitizedUser),
+        isName: false,
+      };
+    }
+
+    const providedName =
+      verifyMobileOtpDto.name?.trim() || record.requestedName?.trim();
+    if (!providedName) {
+      return {
+        isName: true,
+        mobileNumber,
+        message: 'Name is required to complete mobile signup',
+      };
+    }
+
     this.mobileOtpStore.delete(mobileNumber);
 
-    const user =
-      (await this.usersService.findOneByMobile(mobileNumber)) ||
-      (await this.usersService.createMobileUser(
-        mobileNumber,
-        verifyMobileOtpDto.name?.trim() || record.requestedName,
-      ));
+    const user = await this.usersService.createMobileUser(
+      mobileNumber,
+      providedName,
+    );
 
     const sanitizedUser = user.toObject ? user.toObject() : user;
-    return this.buildAuthResponse(sanitizedUser);
+    return {
+      ...this.buildAuthResponse(sanitizedUser),
+      isName: false,
+    };
   }
 
   async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {

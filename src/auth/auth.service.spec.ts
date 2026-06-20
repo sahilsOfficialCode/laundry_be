@@ -196,4 +196,97 @@ describe('AuthService', () => {
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
+
+  it('verifies mobile OTP for an existing user and returns isName false', async () => {
+    await service.sendMobileOtp({ mobileNumber: '+919876543210' });
+    const otp = sendMobileOtpService.sendOtp.mock.calls[0][0].otp;
+    usersService.findOneByMobile.mockResolvedValue({
+      _id: 'user-id',
+      mobileNumber: '+919876543210',
+      name: 'Test User',
+      role: UserRole.USER,
+      toObject: () => ({
+        _id: 'user-id',
+        mobileNumber: '+919876543210',
+        name: 'Test User',
+        role: UserRole.USER,
+      }),
+    });
+
+    const result = await service.verifyMobileOtp({
+      mobileNumber: '+919876543210',
+      otp,
+    });
+
+    expect(result).toEqual({
+      access_token: 'signed-token',
+      isName: false,
+      user: {
+        id: 'user-id',
+        email: '',
+        mobileNumber: '+919876543210',
+        name: 'Test User',
+        role: UserRole.USER,
+      },
+    });
+    expect(usersService.createMobileUser).not.toHaveBeenCalled();
+  });
+
+  it('returns isName true when a verified mobile OTP has no matching user or name', async () => {
+    await service.sendMobileOtp({ mobileNumber: '+919876543210' });
+    const otp = sendMobileOtpService.sendOtp.mock.calls[0][0].otp;
+    usersService.findOneByMobile.mockResolvedValue(null);
+
+    const result = await service.verifyMobileOtp({
+      mobileNumber: '+919876543210',
+      otp,
+    });
+
+    expect(result).toEqual({
+      isName: true,
+      mobileNumber: '+919876543210',
+      message: 'Name is required to complete mobile signup',
+    });
+    expect(usersService.createMobileUser).not.toHaveBeenCalled();
+  });
+
+  it('creates a mobile user and returns isName false when name is provided', async () => {
+    await service.sendMobileOtp({ mobileNumber: '+919876543210' });
+    const otp = sendMobileOtpService.sendOtp.mock.calls[0][0].otp;
+    usersService.findOneByMobile.mockResolvedValue(null);
+    usersService.createMobileUser.mockResolvedValue({
+      _id: 'new-user-id',
+      mobileNumber: '+919876543210',
+      name: 'New User',
+      role: UserRole.USER,
+      toObject: () => ({
+        _id: 'new-user-id',
+        mobileNumber: '+919876543210',
+        name: 'New User',
+        role: UserRole.USER,
+      }),
+    });
+
+    const result = await service.verifyMobileOtp({
+      mobileNumber: '+919876543210',
+      otp,
+      name: 'New User',
+    });
+
+    expect(usersService.createMobileUser).toHaveBeenCalledWith(
+      '+919876543210',
+      'New User',
+    );
+    expect(result).toEqual({
+      access_token: 'signed-token',
+      isName: false,
+      user: {
+        id: 'new-user-id',
+        email: '',
+        mobileNumber: '+919876543210',
+        name: 'New User',
+        role: UserRole.USER,
+      },
+    });
+  });
 });

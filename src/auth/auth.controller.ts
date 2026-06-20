@@ -55,12 +55,14 @@ export class AuthController {
     @Res({ passthrough: true }) response: Response,
   ) {
     const result = await this.authService.verifyMobileOtp(verifyMobileOtpDto);
-    response.cookie('access_token', result.access_token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'none',
-      maxAge: 24 * 60 * 60 * 1000,
-    });
+    if ('access_token' in result) {
+      response.cookie('access_token', result.access_token, {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'none',
+        maxAge: 24 * 60 * 60 * 1000,
+      });
+    }
 
     return result;
   }
