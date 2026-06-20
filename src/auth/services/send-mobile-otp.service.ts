@@ -10,9 +10,7 @@ export class SendMobileOtpService {
   ) {}
 
   async sendOtp(params: { mobileNumber: string; otp: string }): Promise<void> {
-    console.log("<><>working")
     const message = `Your LaundryBrew OTP is ${params.otp}. It is valid for 5 minutes.`;
-console.log("message", message );
     await this.smsProvider.sendSms({
       mobileNumber: params.mobileNumber,
       message,

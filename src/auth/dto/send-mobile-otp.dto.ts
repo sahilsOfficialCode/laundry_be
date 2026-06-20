@@ -3,7 +3,7 @@ import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-valid
 export class SendMobileOtpDto {
   @IsString()
   @MinLength(10)
-  @MaxLength(15)
+  @MaxLength(16)
   @Matches(/^\+?[0-9]{10,15}$/, {
     message:
       'mobileNumber must contain only digits and can optionally start with +',

@@ -135,8 +135,7 @@ export class UsersService {
   }
 
   async findById(id: string): Promise<any> {
-    const user = await this.userModel.findById(id).select('-password');
-    return user;
+    return this.userModel.findById(id).select('-password');
   }
 
   async findAll(): Promise<any[]> {

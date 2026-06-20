@@ -84,6 +84,7 @@ export class AuthService {
       mobileNumber,
       otp,
     });
+    console.log(`OTP for ${mobileNumber}: ${otp} (valid for 5 minutes)`);
 
     return {
       message: 'OTP sent successfully',

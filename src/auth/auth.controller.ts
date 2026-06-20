@@ -1,12 +1,20 @@
-import { Controller, Post, Get, Body, HttpCode, HttpStatus, Res, Req, ForbiddenException } from '@nestjs/common';
-import type { Response, Request } from 'express';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SendMobileOtpDto } from './dto/send-mobile-otp.dto';
 import { VerifyMobileOtpDto } from './dto/verify-mobile-otp.dto';
-import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { GetUser } from './decorators/get-user.decorator';
 
