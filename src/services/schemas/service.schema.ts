@@ -6,19 +6,25 @@ export type LaundryServiceDocument = LaundryService & Document;
 @Schema({ timestamps: true })
 export class LaundryService {
   @Prop({ required: true })
-  name: string;
+  name!: string;
 
   @Prop({ required: true })
-  price: number;
+  price!: number;
 
   @Prop({ required: true })
-  description: string;
+  description!: string;
 
   @Prop({ required: false })
-  icon: string;
+  icon?: string;
+
+  @Prop({ required: false })
+  category?: string;
+
+  @Prop({ required: false })
+  duration?: string;
 
   @Prop({ required: true, default: true })
-  isAvailable: boolean;
+  isAvailable!: boolean;
 }
 
 export const LaundryServiceSchema = SchemaFactory.createForClass(LaundryService);
