@@ -133,6 +133,9 @@ export class Location {
 
   @Prop({ type: [String], default: [] })
   supportedServiceIds: string[];
+
+  @Prop({ type: [String], default: [] })
+  enabledPaymentMethods: string[];
 }
 
 export const LocationSchema = SchemaFactory.createForClass(Location);

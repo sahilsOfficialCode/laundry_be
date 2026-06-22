@@ -2,6 +2,7 @@ import {
   ArrayMinSize,
   IsArray,
   IsBoolean,
+  IsDefined,
   IsEnum,
   IsInt,
   IsNotEmpty,
@@ -12,20 +13,53 @@ import {
   Max,
   MaxLength,
   Min,
+  Validate,
   ValidateNested,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { DayOfWeek, ServiceAreaType } from '../schemas/location.schema';
 
+@ValidatorConstraint({ name: 'IsValidBranchGeoPoint', async: false })
+class IsValidBranchGeoPointConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown) {
+    if (!value || typeof value !== 'object') {
+      return false;
+    }
+
+    const geoPoint = value as Partial<GeoPointDto>;
+    return (
+      typeof geoPoint.latitude === 'number' &&
+      Number.isFinite(geoPoint.latitude) &&
+      typeof geoPoint.longitude === 'number' &&
+      Number.isFinite(geoPoint.longitude) &&
+      !(geoPoint.latitude === 0 && geoPoint.longitude === 0)
+    );
+  }
+
+  defaultMessage() {
+    return 'geoPoint.latitude and geoPoint.longitude are required finite numbers and cannot both be 0';
+  }
+}
+
 export class GeoPointDto {
   @Type(() => Number)
-  @IsNumber()
+  @IsDefined({ message: 'geoPoint.latitude is required' })
+  @IsNumber(
+    { allowNaN: false, allowInfinity: false },
+    { message: 'geoPoint.latitude must be a finite number' },
+  )
   @Min(-90)
   @Max(90)
   latitude: number;
 
   @Type(() => Number)
-  @IsNumber()
+  @IsDefined({ message: 'geoPoint.longitude is required' })
+  @IsNumber(
+    { allowNaN: false, allowInfinity: false },
+    { message: 'geoPoint.longitude must be a finite number' },
+  )
   @Min(-180)
   @Max(180)
   longitude: number;
@@ -86,6 +120,8 @@ export class CreateLocationDto {
   @Matches(/^\+?[0-9]{8,15}$/)
   contactNumber: string;
 
+  @IsDefined({ message: 'geoPoint is required' })
+  @Validate(IsValidBranchGeoPointConstraint)
   @ValidateNested()
   @Type(() => GeoPointDto)
   geoPoint: GeoPointDto;
@@ -139,6 +175,11 @@ export class CreateLocationDto {
   @IsArray()
   @IsString({ each: true })
   supportedServiceIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  enabledPaymentMethods?: string[];
 }
 
 export class UpdateLocationDto {
@@ -162,6 +203,7 @@ export class UpdateLocationDto {
   contactNumber?: string;
 
   @IsOptional()
+  @Validate(IsValidBranchGeoPointConstraint)
   @ValidateNested()
   @Type(() => GeoPointDto)
   geoPoint?: GeoPointDto;
@@ -223,6 +265,11 @@ export class UpdateLocationDto {
   @IsArray()
   @IsString({ each: true })
   supportedServiceIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  enabledPaymentMethods?: string[];
 }
 
 export class SetLocationStatusDto {

@@ -404,6 +404,7 @@ export class LocationsService {
       next.contactNumber = payload.contactNumber.trim();
     }
     if (payload.geoPoint) {
+      this.validateBranchCoordinates(payload.geoPoint);
       next.geoPoint = {
         type: 'Point',
         coordinates: [payload.geoPoint.longitude, payload.geoPoint.latitude],
@@ -443,9 +444,45 @@ export class LocationsService {
     if (payload.supportedServiceIds !== undefined) {
       next.supportedServiceIds = payload.supportedServiceIds.map((item) => item.trim());
     }
+    if (payload.enabledPaymentMethods !== undefined) {
+      next.enabledPaymentMethods = payload.enabledPaymentMethods.map((item) => item.trim());
+    }
 
     this.validateServiceAreaConsistency(next);
     return next;
+  }
+
+  private validateBranchCoordinates(geoPoint: {
+    latitude?: number;
+    longitude?: number;
+  }) {
+    if (geoPoint.latitude === undefined || geoPoint.latitude === null) {
+      throw new BadRequestException('geoPoint.latitude is required');
+    }
+
+    if (geoPoint.longitude === undefined || geoPoint.longitude === null) {
+      throw new BadRequestException('geoPoint.longitude is required');
+    }
+
+    if (
+      typeof geoPoint.latitude !== 'number' ||
+      !Number.isFinite(geoPoint.latitude)
+    ) {
+      throw new BadRequestException('geoPoint.latitude must be a finite number');
+    }
+
+    if (
+      typeof geoPoint.longitude !== 'number' ||
+      !Number.isFinite(geoPoint.longitude)
+    ) {
+      throw new BadRequestException('geoPoint.longitude must be a finite number');
+    }
+
+    if (geoPoint.latitude === 0 && geoPoint.longitude === 0) {
+      throw new BadRequestException(
+        'geoPoint coordinates cannot be [0,0] for a branch location',
+      );
+    }
   }
 
   private validateServiceAreaConsistency(next: Record<string, any>) {
