@@ -14,6 +14,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { GetUser } from '../auth/decorators/get-user.decorator';
+import { Public } from '../auth/decorators/public.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -91,6 +92,48 @@ export class LocationsController {
   @Roles(UserRole.ADMIN)
   async geocodeAddress(@Body() dto: GeocodeQueryDto) {
     return this.locationsService.geocodeAddress(dto);
+  }
+
+  /**
+   * GET /locations/serviceability?latitude=&longitude=&date=&city=
+   * Public — returns the nearest eligible branch's slots and payment methods.
+   * Used by the frontend checkout flow.
+   */
+  @Public()
+  @Get('serviceability')
+  async getServiceability(
+    @Query('latitude') latitude: string,
+    @Query('longitude') longitude: string,
+    @Query('date') date: string,
+    @Query('city') city?: string,
+  ) {
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    if (isNaN(lat) || isNaN(lng)) {
+      throw new BadRequestException('latitude and longitude are required');
+    }
+    return this.locationsService.getServiceability(lat, lng, date ?? new Date().toISOString().slice(0, 10), city);
+  }
+
+  /**
+   * GET /locations/shops?latitude=&longitude=&date=&city=
+   * Public — returns nearby active shops ordered by distance.
+   * Used by the "Drop at Shop" flow.
+   */
+  @Public()
+  @Get('shops')
+  async getNearbyShops(
+    @Query('latitude') latitude: string,
+    @Query('longitude') longitude: string,
+    @Query('date') date: string,
+    @Query('city') city?: string,
+  ) {
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    if (isNaN(lat) || isNaN(lng)) {
+      throw new BadRequestException('latitude and longitude are required');
+    }
+    return this.locationsService.getNearbyShops(lat, lng, date ?? new Date().toISOString().slice(0, 10), city);
   }
 
   @Get()

@@ -46,9 +46,12 @@ export class OrdersService {
     let assignedLocation: any = null;
 
     // Service-zone coverage check:
-    // Pickup coordinates must fall inside an active admin-configured service
-    // zone before the order can proceed.
+    // Only enforced when at least one active service zone is configured.
+    // If no zones exist, coverage is determined by the location's own
+    // serviceRadiusKm / servicePolygon instead.
+    const activeZoneCount = await this.serviceZonesService.countActive();
     if (
+      activeZoneCount > 0 &&
       checkoutContext.pickupLatitude != null &&
       checkoutContext.pickupLongitude != null
     ) {

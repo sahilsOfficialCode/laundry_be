@@ -392,6 +392,124 @@ export class LocationsService {
     return this.locationModel.countDocuments({ isActive: true }).exec();
   }
 
+  // ── Serviceability endpoint ────────────────────────────────────────────────
+
+  /**
+   * Returns the nearest eligible location's slots and payment methods for
+   * the given coordinates/date. Used by the frontend checkout flow.
+   */
+  async getServiceability(
+    latitude: number,
+    longitude: number,
+    date: string,
+    city?: string,
+  ) {
+    const resolved = await this.resolveLocation({
+      latitude,
+      longitude,
+      city,
+      requestedDate: date,
+    });
+
+    const loc = resolved.selectedLocation;
+    if (!loc) {
+      return null;
+    }
+
+    const pickupSlots = (loc.pickupSlots || []).map((s: any) => ({
+      label: s.label,
+      startTime: s.startTime,
+      endTime: s.endTime,
+      remainingCapacity: s.capacity ?? null,
+    }));
+
+    const deliverySlots = (loc.deliverySlots || []).map((s: any) => ({
+      label: s.label,
+      startTime: s.startTime,
+      endTime: s.endTime,
+      remainingCapacity: s.capacity ?? null,
+    }));
+
+    const paymentMethods: string[] =
+      (loc.enabledPaymentMethods || []).length > 0
+        ? loc.enabledPaymentMethods
+        : ['upi', 'credit_card', 'debit_card', 'net_banking', 'cash_on_delivery'];
+
+    return {
+      shop: {
+        _id: String(loc._id),
+        shopName: loc.shopName,
+        fullAddress: loc.fullAddress,
+        city: loc.city,
+        contactNumber: loc.contactNumber,
+        distanceKm: loc.distanceMeters != null
+          ? +(loc.distanceMeters / 1000).toFixed(2)
+          : null,
+        isOpen: true,
+        recommended: true,
+      },
+      distanceKm: loc.distanceMeters != null
+        ? +(loc.distanceMeters / 1000).toFixed(2)
+        : null,
+      estimatedPickupTime: '2–3 hrs',
+      pickupSlots,
+      deliverySlots,
+      paymentMethods,
+    };
+  }
+
+  /**
+   * Returns a list of active shops near the given coordinates, ordered by
+   * distance. Used by the frontend's "Drop at Shop" flow.
+   */
+  async getNearbyShops(
+    latitude: number,
+    longitude: number,
+    date: string,
+    city?: string,
+  ) {
+    const candidates = await this.fetchNearestCandidates({
+      latitude,
+      longitude,
+      city,
+      requestedDate: date,
+    });
+
+    const requestedDate = new Date(date);
+
+    const results = await Promise.all(
+      candidates.map(async (loc) => {
+        const eval_ = await this.evaluateLocationEligibility(
+          loc,
+          { latitude, longitude, requestedDate: date },
+          requestedDate,
+        );
+        const isOpen = eval_.reasons.every(
+          (r) => r.code !== 'LOCATION_INACTIVE' &&
+                  r.code !== 'LOCATION_CLOSED_TODAY' &&
+                  r.code !== 'LOCATION_TEMPORARILY_UNAVAILABLE',
+        );
+        return {
+          shop: {
+            _id: String(loc._id),
+            shopName: loc.shopName,
+            fullAddress: loc.fullAddress,
+            city: loc.city,
+            contactNumber: loc.contactNumber,
+          },
+          distanceKm: loc.distanceMeters != null
+            ? +(loc.distanceMeters / 1000).toFixed(2)
+            : null,
+          isOpen,
+          recommended: eval_.isEligible,
+          unavailableReason: isOpen ? null : eval_.reasons[0]?.message,
+        };
+      }),
+    );
+
+    return results.slice(0, 10);
+  }
+
   // ── Bulk import from JSON file ─────────────────────────────────────────────
 
   async bulkImportFromJson(
@@ -705,20 +823,25 @@ export class LocationsService {
       reasons.push({ code: 'LOCATION_INACTIVE', message: 'Branch temporarily unavailable' });
     }
 
-    const day = toDayOfWeek(requestedDate);
-    const schedule = (candidate.workingSchedule || []).find((item: any) => item.day === day);
-    if (!schedule || !schedule.isOpen) {
-      reasons.push({ code: 'LOCATION_CLOSED_TODAY', message: 'Location closed today' });
-    } else if (
-      payload.requestedTime &&
-      schedule.openTime &&
-      schedule.closeTime &&
-      !isTimeWithinRange(payload.requestedTime, schedule.openTime, schedule.closeTime)
-    ) {
-      reasons.push({
-        code: 'LOCATION_CLOSED_THIS_TIME',
-        message: 'Location is closed at selected time',
-      });
+    // Only enforce working schedule when the location has one configured.
+    // An empty schedule means the location accepts orders any time.
+    const hasSchedule = (candidate.workingSchedule || []).length > 0;
+    if (hasSchedule) {
+      const day = toDayOfWeek(requestedDate);
+      const schedule = candidate.workingSchedule.find((item: any) => item.day === day);
+      if (!schedule || !schedule.isOpen) {
+        reasons.push({ code: 'LOCATION_CLOSED_TODAY', message: 'Location closed today' });
+      } else if (
+        payload.requestedTime &&
+        schedule.openTime &&
+        schedule.closeTime &&
+        !isTimeWithinRange(payload.requestedTime, schedule.openTime, schedule.closeTime)
+      ) {
+        reasons.push({
+          code: 'LOCATION_CLOSED_THIS_TIME',
+          message: 'Location is closed at selected time',
+        });
+      }
     }
 
     const closure = await this.locationClosureModel
@@ -750,23 +873,28 @@ export class LocationsService {
       });
     }
 
-    if (payload.pickupSlot) {
-      const hasPickupSlot = (candidate.pickupSlots || []).some(
-        (slot: any) => slot.label === payload.pickupSlot,
+    // Only enforce pickup/delivery slot matching when the location has slots
+    // configured. An empty slots array means the location accepts any slot label.
+    const locationPickupSlots: any[] = candidate.pickupSlots || [];
+    const locationDeliverySlots: any[] = candidate.deliverySlots || [];
+
+    if (payload.pickupSlot && locationPickupSlots.length > 0) {
+      const hasPickupSlot = locationPickupSlots.some(
+        (slot) => slot.label === payload.pickupSlot,
       );
       if (!hasPickupSlot) {
-        reasons.push({ code: 'NO_PICKUP_SLOTS_AVAILABLE', message: 'No pickup slots available' });
+        reasons.push({ code: 'NO_PICKUP_SLOTS_AVAILABLE', message: 'Selected pickup slot is not available at this branch' });
       }
     }
 
-    if (payload.deliverySlot) {
-      const hasDeliverySlot = (candidate.deliverySlots || []).some(
-        (slot: any) => slot.label === payload.deliverySlot,
+    if (payload.deliverySlot && locationDeliverySlots.length > 0) {
+      const hasDeliverySlot = locationDeliverySlots.some(
+        (slot) => slot.label === payload.deliverySlot,
       );
       if (!hasDeliverySlot) {
         reasons.push({
           code: 'NO_DELIVERY_SLOTS_AVAILABLE',
-          message: 'No pickup slots available',
+          message: 'Selected delivery slot is not available at this branch',
         });
       }
     }
@@ -779,13 +907,16 @@ export class LocationsService {
       status: { $ne: OrderStatus.CANCELLED },
     });
 
-    if (bookedCount >= (candidate.dailyBookingLimit || 0)) {
-      reasons.push({ code: 'DAILY_CAPACITY_REACHED', message: 'No pickup slots available' });
+    // Only enforce daily limit when it is explicitly set (> 0).
+    const dailyLimit = candidate.dailyBookingLimit ?? 0;
+    if (dailyLimit > 0 && bookedCount >= dailyLimit) {
+      reasons.push({ code: 'DAILY_CAPACITY_REACHED', message: 'No more slots available for today' });
     }
 
-    if (payload.pickupSlot) {
-      const matchedSlot = (candidate.pickupSlots || []).find(
-        (slot: any) => slot.label === payload.pickupSlot,
+    // Per-slot capacity check (only when location has slots AND slot has a capacity set).
+    if (payload.pickupSlot && locationPickupSlots.length > 0) {
+      const matchedSlot = locationPickupSlots.find(
+        (slot) => slot.label === payload.pickupSlot,
       );
       if (matchedSlot?.capacity) {
         const slotBookedCount = await this.orderModel.countDocuments({
@@ -797,7 +928,7 @@ export class LocationsService {
         if (slotBookedCount >= matchedSlot.capacity) {
           reasons.push({
             code: 'NO_PICKUP_SLOTS_AVAILABLE',
-            message: 'No pickup slots available',
+            message: 'Selected pickup slot is fully booked for today',
           });
         }
       }
@@ -806,7 +937,9 @@ export class LocationsService {
     return {
       location: {
         ...candidate,
-        remainingCapacity: Math.max(0, (candidate.dailyBookingLimit || 0) - bookedCount),
+        remainingCapacity: dailyLimit > 0
+          ? Math.max(0, dailyLimit - bookedCount)
+          : null,
       },
       reasons,
       isEligible: reasons.length === 0,

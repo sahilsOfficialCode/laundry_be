@@ -127,6 +127,11 @@ export class ServiceZonesService {
     return { covered: false, zone: null, distanceKm: null };
   }
 
+  /** Returns the number of active (available) service zones. */
+  async countActive(): Promise<number> {
+    return this.zoneModel.countDocuments({ isAvailable: true }).exec();
+  }
+
   /**
    * Throws BadRequestException if the coordinates are not within any active
    * service zone. Used by OrdersService during checkout.
