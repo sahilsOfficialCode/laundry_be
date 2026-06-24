@@ -1,14 +1,18 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
   Param,
-  ParseIntPipe,
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -25,6 +29,7 @@ import {
 } from './dto/location-closure.dto';
 import { ListAuditLogsQueryDto, ListLocationsQueryDto } from './dto/list-locations.dto';
 import { EligibleLocationCheckDto, ResolveLocationDto } from './dto/resolve-location.dto';
+import { GeocodeQueryDto } from './dto/geocode.dto';
 import { LocationsService } from './locations.service';
 
 @Controller('locations')
@@ -32,10 +37,60 @@ import { LocationsService } from './locations.service';
 export class LocationsController {
   constructor(private readonly locationsService: LocationsService) {}
 
+  /** POST /locations — Admin creates a single location manually */
   @Post()
   @Roles(UserRole.ADMIN)
   async createLocation(@Body() dto: CreateLocationDto, @GetUser() actor: any) {
     return this.locationsService.createLocation(dto, actor);
+  }
+
+  /**
+   * POST /locations/import
+   * Admin uploads a JSON file containing an array of location objects.
+   * Returns { imported, failed, errors[] }.
+   *
+   * Minimal row shape:
+   * {
+   *   "shopName": "Bright Wash", "city": "Malappuram",
+   *   "fullAddress": "NH 66, Ponnani", "contactNumber": "+919876543210",
+   *   "latitude": 10.7867, "longitude": 75.9999,
+   *   "serviceAreaType": "radius", "serviceRadiusKm": 5
+   * }
+   */
+  @Post('import')
+  @Roles(UserRole.ADMIN)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (!file.originalname.match(/\.json$/i)) {
+          return cb(new BadRequestException('Only .json files are accepted'), false);
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  async importLocations(
+    @UploadedFile() file: { buffer: Buffer; originalname: string } | undefined,
+    @GetUser() actor: any,
+  ) {
+    if (!file) {
+      throw new BadRequestException('No file uploaded — send a .json file in the "file" field');
+    }
+    return this.locationsService.bulkImportFromJson(file.buffer, actor);
+  }
+
+  /**
+   * POST /locations/geocode
+   * Admin submits a free-text address/place; gets lat/lng candidates from
+   * OpenStreetMap Nominatim (no API key required).
+   * Body: { query: "Mappala House, Ponnani", city?: "Malappuram", limit?: 5 }
+   */
+  @Post('geocode')
+  @Roles(UserRole.ADMIN)
+  async geocodeAddress(@Body() dto: GeocodeQueryDto) {
+    return this.locationsService.geocodeAddress(dto);
   }
 
   @Get()

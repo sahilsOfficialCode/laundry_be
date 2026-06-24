@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Laundry Admin Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; color: #333; background: #fff; }
+
+    /* ── Navbar ── */
+    .navbar {
+      display: flex;
+      align-items: center;
+      height: 46px;
+      padding: 0 16px;
+      border-bottom: 2px solid #e85d5d;
+      background: #fff;
+      gap: 4px;
+    }
+    .navbar-logo {
+      width: 28px;
+      height: 28px;
+      background: #4f8ef7;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-right: 8px;
+      flex-shrink: 0;
+    }
+    .navbar-logo svg { fill: #fff; width: 16px; height: 16px; }
+    .nav-item {
+      position: relative;
+      padding: 0 10px;
+      height: 46px;
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      font-size: 13px;
+      color: #333;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .nav-item:hover { background: #f5f5f5; }
+    .nav-item .arrow { margin-left: 4px; font-size: 10px; color: #666; }
+    .nav-spacer { flex: 1; }
+    .btn-signout {
+      background: #e85d5d;
+      color: #fff;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .btn-signout:hover { background: #d44; }
+
+    /* ── Dropdown menu ── */
+    .nav-item .dropdown {
+      display: none;
+      position: absolute;
+      top: 46px;
+      left: 0;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      min-width: 140px;
+      box-shadow: 0 4px 12px rgba(0,0,0,.1);
+      z-index: 100;
+    }
+    .nav-item:hover .dropdown { display: block; }
+    .dropdown a {
+      display: block;
+      padding: 8px 14px;
+      color: #333;
+      text-decoration: none;
+      font-size: 13px;
+    }
+    .dropdown a:hover { background: #f5f5f5; }
+
+    /* ── Page body ── */
+    .page { padding: 16px 20px; }
+
+    /* ── Filter row ── */
+    .filter-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .filter-row select,
+    .filter-row input[type="date"] {
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: 6px 10px;
+      font-size: 13px;
+      height: 34px;
+      color: #333;
+      background: #fff;
+    }
+    .filter-row select { min-width: 150px; }
+    .btn {
+      height: 34px;
+      padding: 0 14px;
+      border-radius: 4px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .btn-primary { background: #4f8ef7; color: #fff; border-color: #4f8ef7; }
+    .btn-primary:hover { background: #3a7de0; }
+    .btn-purple { background: #7c5cbf; color: #fff; border-color: #7c5cbf; }
+    .btn-purple:hover { background: #6a4daa; }
+    .btn-outline { background: #fff; color: #333; border-color: #ccc; }
+    .btn-outline:hover { background: #f5f5f5; }
+
+    /* ── Stats note ── */
+    .stats-note { font-size: 12px; color: #888; text-align: center; margin-bottom: 10px; }
+
+    /* ── Summary table card ── */
+    .summary-card {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 24px;
+      max-width: 620px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .summary-card h3 {
+      text-align: center;
+      padding: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      border-bottom: 1px solid #eee;
+      background: #fafafa;
+    }
+
+    /* ── Tables ── */
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 7px 10px; text-align: left; font-size: 12px; }
+    th { color: #555; font-weight: 600; border-bottom: 1px solid #eee; }
+    td { border-bottom: 1px solid #f0f0f0; }
+    tr:last-child td { border-bottom: none; }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid #ddd;
+      margin-bottom: 20px;
+    }
+    .tab {
+      padding: 8px 14px;
+      cursor: pointer;
+      font-size: 13px;
+      color: #555;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .tab.active { color: #4f8ef7; border-bottom-color: #4f8ef7; font-weight: 500; }
+    .tab:hover:not(.active) { color: #333; }
+
+    /* ── Tab panels ── */
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── Distribution section ── */
+    .country-section { margin-bottom: 28px; }
+    .country-title { font-size: 22px; font-weight: 600; margin-bottom: 12px; color: #111; }
+    .city-card {
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      overflow: hidden;
+      max-width: 340px;
+      margin-bottom: 16px;
+    }
+    .city-title {
+      padding: 8px 12px;
+      font-weight: 600;
+      font-size: 13px;
+      border-bottom: 1px solid #eee;
+      background: #fafafa;
+    }
+
+    /* ── Order page placeholder ── */
+    .order-page-label { font-size: 22px; font-weight: 600; color: #111; margin-top: 20px; }
+  </style>
+</head>
+<body>
+
+<!-- ── Navbar ── -->
+<nav class="navbar">
+  <div class="navbar-logo">
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C8 7 5 10.5 5 14a7 7 0 0014 0c0-3.5-3-7-7-12z"/>
+    </svg>
+  </div>
+
+  <div class="nav-item">Orders <span class="arrow">▾</span>
+    <div class="dropdown">
+      <a href="#">All Orders</a>
+      <a href="#">Pending</a>
+      <a href="#">Completed</a>
+    </div>
+  </div>
+  <div class="nav-item">Users <span class="arrow">▾</span>
+    <div class="dropdown">
+      <a href="#">All Users</a>
+      <a href="#">Active</a>
+    </div>
+  </div>
+  <div class="nav-item">Drivers <span class="arrow">▾</span>
+    <div class="dropdown">
+      <a href="#">All Drivers</a>
+      <a href="#">Available</a>
+    </div>
+  </div>
+  <div class="nav-item">Logistics <span class="arrow">▾</span>
+    <div class="dropdown">
+      <a href="#">Zones</a>
+      <a href="#">Routes</a>
+    </div>
+  </div>
+  <div class="nav-item">Timeslots <span class="arrow">▾</span>
+    <div class="dropdown">
+      <a href="#">Manage Timeslots</a>
+    </div>
+  </div>
+  <div class="nav-item">Facilities <span class="arrow">▾</span>
+    <div class="dropdown">
+      <a href="#">All Facilities</a>
+    </div>
+  </div>
+  <div class="nav-item">Reviews <span class="arrow">▾</span>
+    <div class="dropdown">
+      <a href="#">All Reviews</a>
+    </div>
+  </div>
+
+  <div class="nav-spacer"></div>
+  <button class="btn-signout">Sign out</button>
+</nav>
+
+<!-- ── Page ── -->
+<div class="page">
+
+  <!-- Filter row -->
+  <div class="filter-row">
+    <select>
+      <option value="">Select city</option>
+      <option>Manama</option>
+      <option>Bogotá</option>
+    </select>
+    <input type="date" value="2025-12-27" />
+    <input type="date" value="2025-12-28" />
+    <button class="btn btn-primary">Filter</button>
+    <button class="btn btn-purple">Update stats</button>
+    <button class="btn btn-outline">All orders</button>
+  </div>
+
+  <div class="stats-note">Stats updated 35 minutes ago.</div>
+
+  <!-- Summary card -->
+  <div class="summary-card">
+    <h3>Tasks between Sat, 27-Dec-2025 - Sun, 28-Dec-2025</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th><th>P</th><th>D</th><th>All</th><th>Delayed</th><th>Early</th><th>Resched</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Sat, 27-Dec-2025</td><td>1331</td><td>911</td><td>2242</td>
+          <td>1.09 %</td><td>9.85 %</td><td>7.33 %</td>
+        </tr>
+        <tr>
+          <td>Sun, 28-Dec-2025</td><td>213</td><td>935</td><td>1148</td>
+          <td>0.0 %</td><td>0.0 %</td><td>1.99 %</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab" onclick="switchTab('statistics')">Task statistics</div>
+    <div class="tab active" onclick="switchTab('distribution')">Task distribution</div>
+  </div>
+
+  <!-- Task Statistics panel -->
+  <div id="panel-statistics" class="tab-panel">
+    <p style="color:#888;font-size:13px;">Task statistics content goes here.</p>
+  </div>
+
+  <!-- Task Distribution panel -->
+  <div id="panel-distribution" class="tab-panel active">
+
+    <!-- Bahrain -->
+    <div class="country-section">
+      <div class="country-title">Bahrain</div>
+      <div class="city-card">
+        <div class="city-title">Manama</div>
+        <table>
+          <thead>
+            <tr><th>Date</th><th>P</th><th>D</th><th>All</th><th>Delayed</th><th>Early</th><th>Resched</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Sat, 27-Dec-2025</td><td>31</td><td>9</td><td>40</td><td>0.0 %</td><td>0.0 %</td><td>9.09 %</td></tr>
+            <tr><td>Sun, 28-Dec-2025</td><td>1</td><td>29</td><td>30</td><td>0.0 %</td><td>0.0 %</td><td>0.0 %</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Colombia -->
+    <div class="country-section">
+      <div class="country-title">Colombia</div>
+      <div class="city-card">
+        <div class="city-title">Bogotá</div>
+        <table>
+          <thead>
+            <tr><th>Date</th><th>P</th><th>D</th><th>All</th><th>Delayed</th><th>Early</th><th>Resched</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /distribution panel -->
+
+  <!-- Order page label (matches screenshot) -->
+  <div class="order-page-label">Order page :</div>
+
+</div><!-- /page -->
+
+<script>
+  function switchTab(name) {
+    document.querySelectorAll('.tab').forEach((t, i) => {
+      t.classList.toggle('active', ['statistics','distribution'][i] === name);
+    });
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('panel-' + name).classList.add('active');
+  }
+</script>
+
+</body>
+</html>

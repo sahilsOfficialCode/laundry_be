@@ -1,6 +1,8 @@
+import * as https from 'https';
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -30,6 +32,8 @@ import {
   UpdateLocationClosureDto,
 } from './dto/location-closure.dto';
 import { ListLocationsQueryDto } from './dto/list-locations.dto';
+import { GeocodeCandidate, GeocodeQueryDto } from './dto/geocode.dto';
+import { LocationImportResult, LocationImportRow } from './dto/import-location.dto';
 import {
   EligibleLocationCheckDto,
   ResolveLocationDto,
@@ -73,6 +77,8 @@ export type LocationResolutionResult = {
 
 @Injectable()
 export class LocationsService {
+  private readonly logger = new Logger(LocationsService.name);
+
   constructor(
     @InjectModel(Location.name)
     private readonly locationModel: Model<LocationDocument>,
@@ -386,23 +392,180 @@ export class LocationsService {
     return this.locationModel.countDocuments({ isActive: true }).exec();
   }
 
+  // ── Bulk import from JSON file ─────────────────────────────────────────────
+
+  async bulkImportFromJson(
+    fileBuffer: Buffer,
+    actor: RequestActor,
+  ): Promise<LocationImportResult> {
+    let rows: unknown;
+    try {
+      rows = JSON.parse(fileBuffer.toString('utf8'));
+    } catch {
+      throw new BadRequestException('Invalid JSON — could not parse uploaded file');
+    }
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw new BadRequestException(
+        'JSON file must contain a non-empty array of location objects',
+      );
+    }
+
+    const result: LocationImportResult = { imported: 0, failed: 0, errors: [] };
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] as LocationImportRow;
+      try {
+        this.validateImportRow(row, i + 1);
+        const dto = this.importRowToCreateDto(row);
+        await this.createLocation(dto as any, actor);
+        result.imported++;
+      } catch (err: any) {
+        result.failed++;
+        result.errors.push({
+          row: i + 1,
+          shopName: (row as any)?.shopName,
+          reason: err?.message ?? 'Unknown error',
+        });
+      }
+    }
+
+    return result;
+  }
+
+  private validateImportRow(row: LocationImportRow, rowNum: number) {
+    const miss: string[] = [];
+    if (!row.shopName?.trim()) miss.push('shopName');
+    if (!row.city?.trim()) miss.push('city');
+    if (!row.fullAddress?.trim()) miss.push('fullAddress');
+    if (!row.contactNumber?.trim()) miss.push('contactNumber');
+    if (row.latitude == null || !Number.isFinite(Number(row.latitude))) miss.push('latitude');
+    if (row.longitude == null || !Number.isFinite(Number(row.longitude))) miss.push('longitude');
+
+    if (miss.length) {
+      throw new BadRequestException(
+        `Row ${rowNum}: missing or invalid fields: ${miss.join(', ')}`,
+      );
+    }
+
+    const lat = Number(row.latitude);
+    const lng = Number(row.longitude);
+    if (lat === 0 && lng === 0) {
+      throw new BadRequestException(`Row ${rowNum}: coordinates cannot be [0,0]`);
+    }
+
+    const areaType = row.serviceAreaType ?? 'radius';
+    if (areaType === 'radius' && !row.serviceRadiusKm) {
+      throw new BadRequestException(
+        `Row ${rowNum}: serviceRadiusKm is required for radius type`,
+      );
+    }
+    if (areaType === 'polygon' && !row.servicePolygon) {
+      throw new BadRequestException(
+        `Row ${rowNum}: servicePolygon is required for polygon type`,
+      );
+    }
+  }
+
+  private importRowToCreateDto(row: LocationImportRow) {
+    return {
+      shopName: row.shopName.trim(),
+      city: row.city.trim(),
+      fullAddress: row.fullAddress.trim(),
+      contactNumber: row.contactNumber.trim(),
+      geoPoint: {
+        latitude: Number(row.latitude),
+        longitude: Number(row.longitude),
+      },
+      serviceAreaType: row.serviceAreaType ?? 'radius',
+      serviceRadiusKm: row.serviceRadiusKm,
+      servicePolygon: row.servicePolygon,
+      timezone: row.timezone ?? 'Asia/Kolkata',
+      dailyBookingLimit: row.dailyBookingLimit ?? 200,
+      isActive: row.isActive ?? true,
+      pricingProfileKey: row.pricingProfileKey,
+      supportedServiceIds: row.supportedServiceIds ?? [],
+      enabledPaymentMethods: row.enabledPaymentMethods ?? [],
+      workingSchedule: row.workingSchedule ?? [],
+      pickupSlots: row.pickupSlots ?? [],
+      deliverySlots: row.deliverySlots ?? [],
+    };
+  }
+
+  // ── Auto-fetch coordinates via OpenStreetMap Nominatim ────────────────────
+
+  async geocodeAddress(dto: GeocodeQueryDto): Promise<GeocodeCandidate[]> {
+    const q = dto.city?.trim()
+      ? `${dto.query.trim()}, ${dto.city.trim()}`
+      : dto.query.trim();
+
+    const limit = dto.limit ?? 5;
+    const url =
+      `https://nominatim.openstreetmap.org/search` +
+      `?q=${encodeURIComponent(q)}&format=json&limit=${limit}&addressdetails=1`;
+
+    let raw: any[];
+    try {
+      raw = await this.httpsGet<any[]>(url, {
+        'User-Agent': 'LaundryApp/1.0 (admin geocode)',
+        Accept: 'application/json',
+      });
+    } catch (err: any) {
+      this.logger.error('Nominatim request failed', err?.message);
+      throw new BadRequestException(
+        'Geocoding service unavailable — please try again',
+      );
+    }
+
+    if (!Array.isArray(raw)) return [];
+
+    return raw.map((item) => ({
+      displayName: item.display_name ?? '',
+      latitude: parseFloat(item.lat),
+      longitude: parseFloat(item.lon),
+      city:
+        item.address?.city ??
+        item.address?.town ??
+        item.address?.village ??
+        item.address?.county ??
+        null,
+      country: item.address?.country ?? null,
+      type: item.type ?? item.class ?? 'place',
+    }));
+  }
+
+  private httpsGet<T>(url: string, headers: Record<string, string> = {}): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const req = https.get(url, { headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as T);
+          } catch (e) {
+            reject(e);
+          }
+        });
+      });
+      req.on('error', reject);
+      req.setTimeout(8000, () => {
+        req.destroy();
+        reject(new Error('Geocode request timed out'));
+      });
+    });
+  }
+
+  // ── Private helpers ────────────────────────────────────────────────────────
+
   private normalizeLocationPayload(
     payload: Partial<CreateLocationDto | UpdateLocationDto>,
   ) {
     const next: Record<string, any> = {};
 
-    if (payload.shopName !== undefined) {
-      next.shopName = payload.shopName.trim();
-    }
-    if (payload.city !== undefined) {
-      next.city = payload.city.trim();
-    }
-    if (payload.fullAddress !== undefined) {
-      next.fullAddress = payload.fullAddress.trim();
-    }
-    if (payload.contactNumber !== undefined) {
-      next.contactNumber = payload.contactNumber.trim();
-    }
+    if (payload.shopName !== undefined) next.shopName = payload.shopName.trim();
+    if (payload.city !== undefined) next.city = payload.city.trim();
+    if (payload.fullAddress !== undefined) next.fullAddress = payload.fullAddress.trim();
+    if (payload.contactNumber !== undefined) next.contactNumber = payload.contactNumber.trim();
     if (payload.geoPoint) {
       this.validateBranchCoordinates(payload.geoPoint);
       next.geoPoint = {
@@ -410,34 +573,20 @@ export class LocationsService {
         coordinates: [payload.geoPoint.longitude, payload.geoPoint.latitude],
       };
     }
-    if (payload.serviceAreaType !== undefined) {
-      next.serviceAreaType = payload.serviceAreaType;
-    }
-    if (payload.serviceRadiusKm !== undefined) {
-      next.serviceRadiusKm = payload.serviceRadiusKm;
-    }
+    if (payload.serviceAreaType !== undefined) next.serviceAreaType = payload.serviceAreaType;
+    if (payload.serviceRadiusKm !== undefined) next.serviceRadiusKm = payload.serviceRadiusKm;
     if (payload.servicePolygon !== undefined) {
       next.servicePolygon = this.normalizePolygon(payload.servicePolygon);
     }
     const maybeIsActive = (payload as any).isActive;
-    if (maybeIsActive !== undefined) {
-      next.isActive = maybeIsActive;
-    }
-    if (payload.timezone !== undefined) {
-      next.timezone = payload.timezone;
-    }
+    if (maybeIsActive !== undefined) next.isActive = maybeIsActive;
+    if (payload.timezone !== undefined) next.timezone = payload.timezone;
     if (payload.workingSchedule !== undefined) {
       next.workingSchedule = this.normalizeWorkingSchedule(payload.workingSchedule);
     }
-    if (payload.pickupSlots !== undefined) {
-      next.pickupSlots = this.normalizeSlots(payload.pickupSlots);
-    }
-    if (payload.deliverySlots !== undefined) {
-      next.deliverySlots = this.normalizeSlots(payload.deliverySlots);
-    }
-    if (payload.dailyBookingLimit !== undefined) {
-      next.dailyBookingLimit = payload.dailyBookingLimit;
-    }
+    if (payload.pickupSlots !== undefined) next.pickupSlots = this.normalizeSlots(payload.pickupSlots);
+    if (payload.deliverySlots !== undefined) next.deliverySlots = this.normalizeSlots(payload.deliverySlots);
+    if (payload.dailyBookingLimit !== undefined) next.dailyBookingLimit = payload.dailyBookingLimit;
     if (payload.pricingProfileKey !== undefined) {
       next.pricingProfileKey = payload.pricingProfileKey?.trim();
     }
@@ -452,32 +601,19 @@ export class LocationsService {
     return next;
   }
 
-  private validateBranchCoordinates(geoPoint: {
-    latitude?: number;
-    longitude?: number;
-  }) {
+  private validateBranchCoordinates(geoPoint: { latitude?: number; longitude?: number }) {
     if (geoPoint.latitude === undefined || geoPoint.latitude === null) {
       throw new BadRequestException('geoPoint.latitude is required');
     }
-
     if (geoPoint.longitude === undefined || geoPoint.longitude === null) {
       throw new BadRequestException('geoPoint.longitude is required');
     }
-
-    if (
-      typeof geoPoint.latitude !== 'number' ||
-      !Number.isFinite(geoPoint.latitude)
-    ) {
+    if (typeof geoPoint.latitude !== 'number' || !Number.isFinite(geoPoint.latitude)) {
       throw new BadRequestException('geoPoint.latitude must be a finite number');
     }
-
-    if (
-      typeof geoPoint.longitude !== 'number' ||
-      !Number.isFinite(geoPoint.longitude)
-    ) {
+    if (typeof geoPoint.longitude !== 'number' || !Number.isFinite(geoPoint.longitude)) {
       throw new BadRequestException('geoPoint.longitude must be a finite number');
     }
-
     if (geoPoint.latitude === 0 && geoPoint.longitude === 0) {
       throw new BadRequestException(
         'geoPoint coordinates cannot be [0,0] for a branch location',
@@ -489,7 +625,6 @@ export class LocationsService {
     if (next.serviceAreaType === ServiceAreaType.RADIUS && !next.serviceRadiusKm) {
       throw new BadRequestException('serviceRadiusKm is required for radius type');
     }
-
     if (next.serviceAreaType === ServiceAreaType.POLYGON && !next.servicePolygon) {
       throw new BadRequestException('servicePolygon is required for polygon type');
     }
@@ -499,23 +634,19 @@ export class LocationsService {
     if (!Array.isArray(polygon) || polygon.length === 0) {
       throw new BadRequestException('servicePolygon must contain polygon rings');
     }
-
     const ring = polygon[0];
     if (!Array.isArray(ring) || ring.length < 4) {
-      throw new BadRequestException('servicePolygon outer ring must have at least 4 points');
+      throw new BadRequestException(
+        'servicePolygon outer ring must have at least 4 points',
+      );
     }
-
     const closedRing = [...ring.map((point) => [Number(point[0]), Number(point[1])])];
     const first = closedRing[0];
     const last = closedRing[closedRing.length - 1];
     if (first[0] !== last[0] || first[1] !== last[1]) {
       closedRing.push([first[0], first[1]]);
     }
-
-    return {
-      type: 'Polygon' as const,
-      coordinates: [closedRing],
-    };
+    return { type: 'Polygon' as const, coordinates: [closedRing] };
   }
 
   private normalizeWorkingSchedule(schedule: any[]) {
@@ -524,42 +655,36 @@ export class LocationsService {
       if (dayMap.has(item.day)) {
         throw new BadRequestException(`Duplicate schedule for day ${item.day}`);
       }
-
       if (item.isOpen) {
         if (!item.openTime || !item.closeTime) {
           throw new BadRequestException(
             `openTime and closeTime are required for open day ${item.day}`,
           );
         }
-
         if (item.openTime >= item.closeTime) {
           throw new BadRequestException(
             `openTime must be before closeTime for day ${item.day}`,
           );
         }
       }
-
       dayMap.set(item.day, item);
     }
-
     return Array.from(dayMap.values());
   }
 
   private normalizeSlots(slots: TimeSlotDto[]) {
     const labels = new Set<string>();
-    const normalized = slots.map((slot) => {
+    return slots.map((slot) => {
       const key = slot.label.trim().toLowerCase();
       if (labels.has(key)) {
         throw new BadRequestException(`Duplicate slot label: ${slot.label}`);
       }
       labels.add(key);
-
       if (slot.startTime >= slot.endTime) {
         throw new BadRequestException(
           `slot startTime must be before endTime for ${slot.label}`,
         );
       }
-
       return {
         label: slot.label.trim(),
         startTime: slot.startTime,
@@ -567,8 +692,6 @@ export class LocationsService {
         capacity: slot.capacity,
       };
     });
-
-    return normalized;
   }
 
   private async evaluateLocationEligibility(
@@ -579,19 +702,13 @@ export class LocationsService {
     const reasons: LocationValidationMessage[] = [];
 
     if (!candidate.isActive) {
-      reasons.push({
-        code: 'LOCATION_INACTIVE',
-        message: 'Branch temporarily unavailable',
-      });
+      reasons.push({ code: 'LOCATION_INACTIVE', message: 'Branch temporarily unavailable' });
     }
 
     const day = toDayOfWeek(requestedDate);
     const schedule = (candidate.workingSchedule || []).find((item: any) => item.day === day);
     if (!schedule || !schedule.isOpen) {
-      reasons.push({
-        code: 'LOCATION_CLOSED_TODAY',
-        message: 'Location closed today',
-      });
+      reasons.push({ code: 'LOCATION_CLOSED_TODAY', message: 'Location closed today' });
     } else if (
       payload.requestedTime &&
       schedule.openTime &&
@@ -621,7 +738,11 @@ export class LocationsService {
       });
     }
 
-    const inServiceArea = this.isPointInsideServiceArea(candidate, payload.latitude, payload.longitude);
+    const inServiceArea = this.isPointInsideServiceArea(
+      candidate,
+      payload.latitude,
+      payload.longitude,
+    );
     if (!inServiceArea) {
       reasons.push({
         code: 'SERVICE_NOT_AVAILABLE_IN_AREA',
@@ -634,10 +755,7 @@ export class LocationsService {
         (slot: any) => slot.label === payload.pickupSlot,
       );
       if (!hasPickupSlot) {
-        reasons.push({
-          code: 'NO_PICKUP_SLOTS_AVAILABLE',
-          message: 'No pickup slots available',
-        });
+        reasons.push({ code: 'NO_PICKUP_SLOTS_AVAILABLE', message: 'No pickup slots available' });
       }
     }
 
@@ -662,10 +780,7 @@ export class LocationsService {
     });
 
     if (bookedCount >= (candidate.dailyBookingLimit || 0)) {
-      reasons.push({
-        code: 'DAILY_CAPACITY_REACHED',
-        message: 'No pickup slots available',
-      });
+      reasons.push({ code: 'DAILY_CAPACITY_REACHED', message: 'No pickup slots available' });
     }
 
     if (payload.pickupSlot) {
@@ -679,7 +794,6 @@ export class LocationsService {
           pickupSlot: payload.pickupSlot,
           status: { $ne: OrderStatus.CANCELLED },
         });
-
         if (slotBookedCount >= matchedSlot.capacity) {
           reasons.push({
             code: 'NO_PICKUP_SLOTS_AVAILABLE',
@@ -702,26 +816,14 @@ export class LocationsService {
     };
   }
 
-  private isPointInsideServiceArea(
-    location: any,
-    latitude: number,
-    longitude: number,
-  ) {
+  private isPointInsideServiceArea(location: any, latitude: number, longitude: number) {
     if (location.serviceAreaType === ServiceAreaType.RADIUS) {
       const [lng, lat] = location.geoPoint?.coordinates || [];
-      if (lat == null || lng == null || !location.serviceRadiusKm) {
-        return false;
-      }
-
-      const distanceKm = haversineDistanceKm(latitude, longitude, lat, lng);
-      return distanceKm <= location.serviceRadiusKm;
+      if (lat == null || lng == null || !location.serviceRadiusKm) return false;
+      return haversineDistanceKm(latitude, longitude, lat, lng) <= location.serviceRadiusKm;
     }
-
     const ring = location.servicePolygon?.coordinates?.[0];
-    if (!ring || !Array.isArray(ring)) {
-      return false;
-    }
-
+    if (!ring || !Array.isArray(ring)) return false;
     return isPointInsidePolygon(longitude, latitude, ring);
   }
 
@@ -736,16 +838,14 @@ export class LocationsService {
         ? payload.searchRadiusKm
         : 50) * 1000;
 
-    const point = {
-      type: 'Point' as const,
-      coordinates: [payload.longitude, payload.latitude] as [number, number],
-    };
-
-    const nearest = await this.locationModel
+    return this.locationModel
       .aggregate([
         {
           $geoNear: {
-            near: point,
+            near: {
+              type: 'Point' as const,
+              coordinates: [payload.longitude, payload.latitude] as [number, number],
+            },
             distanceField: 'distanceMeters',
             spherical: true,
             key: 'geoPoint',
@@ -756,22 +856,14 @@ export class LocationsService {
         { $limit: 40 },
       ])
       .exec();
-
-    return nearest;
   }
 
   private reorderCandidates(candidates: any[], preferredLocationId?: string) {
-    if (!preferredLocationId) {
-      return candidates;
-    }
-
+    if (!preferredLocationId) return candidates;
     const preferred = candidates.find(
       (item) => String(item._id) === preferredLocationId,
     );
-    if (!preferred) {
-      return candidates;
-    }
-
+    if (!preferred) return candidates;
     return [
       preferred,
       ...candidates.filter((item) => String(item._id) !== preferredLocationId),
@@ -780,10 +872,7 @@ export class LocationsService {
 
   private async findLocationById(locationId: string) {
     const location = await this.locationModel.findById(locationId).exec();
-    if (!location) {
-      throw new NotFoundException('Location not found');
-    }
-
+    if (!location) throw new NotFoundException('Location not found');
     return location;
   }
 

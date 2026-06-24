@@ -7,6 +7,23 @@ export enum UserRole {
   USER = 'user',
 }
 
+export class UserAddress {
+  id: string;
+  houseNo?: string;
+  buildingName?: string;
+  street?: string;
+  area?: string;
+  landmark?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  type?: string;
+  instructions?: string;
+  isDefault: boolean;
+  lat?: number;
+  lng?: number;
+}
+
 @Schema({ timestamps: true })
 export class User {
   @Prop({ required: true })
@@ -17,7 +34,6 @@ export class User {
   required: false,
   unique: true,
   sparse: true,
-  default: null,
   trim: true,
 })
 email?: string;
@@ -39,6 +55,29 @@ email?: string;
 
   @Prop({ default: true })
   isActive: boolean;
+
+  @Prop({
+    type: [
+      {
+        id: { type: String, required: true },
+        houseNo: { type: String, default: '' },
+        buildingName: { type: String, default: '' },
+        street: { type: String, default: '' },
+        area: { type: String, default: '' },
+        landmark: { type: String, default: '' },
+        city: { type: String, default: '' },
+        state: { type: String, default: '' },
+        pincode: { type: String, default: '' },
+        type: { type: String, default: 'Home' },
+        instructions: { type: String, default: '' },
+        isDefault: { type: Boolean, default: false },
+        lat: { type: Number, required: false },
+        lng: { type: Number, required: false },
+      },
+    ],
+    default: [],
+  })
+  addresses: UserAddress[];
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

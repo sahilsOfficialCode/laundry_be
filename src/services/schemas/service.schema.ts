@@ -5,6 +5,9 @@ export type LaundryServiceDocument = LaundryService & Document;
 
 @Schema({ timestamps: true })
 export class LaundryService {
+  @Prop({ required: true, index: true })
+  userId!: string;
+
   @Prop({ required: true })
   name!: string;
 
@@ -13,9 +16,6 @@ export class LaundryService {
 
   @Prop({ required: true })
   description!: string;
-
-  @Prop({ required: false })
-  icon?: string;
 
   @Prop({ required: false })
   category?: string;

@@ -12,15 +12,15 @@ export class ServicesService {
     private serviceModel: Model<LaundryServiceDocument>,
   ) {}
 
-  async create(createDto: CreateServiceDto): Promise<LaundryService> {
-    const createdService = new this.serviceModel(createDto);
+  async create(userId: string, createDto: CreateServiceDto): Promise<LaundryService> {
+    const createdService = new this.serviceModel({ ...createDto, userId });
     return createdService.save();
   }
 
-  async findAll(filterDto: GetServicesFilterDto = {}): Promise<any> {
+  async findAll(userId: string, filterDto: GetServicesFilterDto = {}): Promise<any> {
     const { search, page, limit } = filterDto;
-    
-    const query: any = {};
+
+    const query: any = { };
     if (search) {
       query.name = { $regex: search, $options: 'i' };
     }
@@ -34,14 +34,15 @@ export class ServicesService {
         .exec();
       
       const total = await this.serviceModel.countDocuments(query);
+      console.log("<><>total",total)
       return {
         data,
         total,
         page,
         limit,
       };
+      
     }
-
     // Default behavior if no pagination requested
     const data = await this.serviceModel.find(query).exec();
     return { data, total: data.length };

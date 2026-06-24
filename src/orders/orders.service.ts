@@ -14,6 +14,7 @@ import {
 } from '../services/schemas/service.schema';
 import { CheckoutContextDto } from './dto/checkout-context.dto';
 import { LocationsService } from '../locations/locations.service';
+import { ServiceZonesService } from '../service-zones/service-zones.service';
 
 @Injectable()
 export class OrdersService {
@@ -28,6 +29,7 @@ export class OrdersService {
     private serviceModel: Model<LaundryServiceDocument>,
 
     private readonly locationsService: LocationsService,
+    private readonly serviceZonesService: ServiceZonesService,
   ) {}
 
   // Create Order (legacy/direct)
@@ -42,7 +44,23 @@ export class OrdersService {
     const checkoutContext = context ?? {};
 
     let assignedLocation: any = null;
-    const activeLocationCount = await this.locationsService.countActiveLocations();
+
+    // Service-zone coverage check:
+    // Pickup coordinates must fall inside an active admin-configured service
+    // zone before the order can proceed.
+    if (
+      checkoutContext.pickupLatitude != null &&
+      checkoutContext.pickupLongitude != null
+    ) {
+      await this.serviceZonesService.assertCovered(
+        checkoutContext.pickupLatitude,
+        checkoutContext.pickupLongitude,
+        checkoutContext.city,
+      );
+    }
+
+    const activeLocationCount =
+      await this.locationsService.countActiveLocations();
 
     if (
       checkoutContext.pickupLatitude != null &&
@@ -50,16 +68,18 @@ export class OrdersService {
     ) {
       const requestedDate =
         checkoutContext.pickupDate ?? new Date().toISOString();
-      assignedLocation = await this.locationsService.validateBookingEligibility({
-        latitude: checkoutContext.pickupLatitude,
-        longitude: checkoutContext.pickupLongitude,
-        city: checkoutContext.city,
-        preferredLocationId: checkoutContext.locationId,
-        requestedDate,
-        requestedTime: checkoutContext.pickupTime,
-        pickupSlot: checkoutContext.pickupSlot,
-        deliverySlot: checkoutContext.deliverySlot,
-      });
+      assignedLocation = await this.locationsService.validateBookingEligibility(
+        {
+          latitude: checkoutContext.pickupLatitude,
+          longitude: checkoutContext.pickupLongitude,
+          city: checkoutContext.city,
+          preferredLocationId: checkoutContext.locationId,
+          requestedDate,
+          requestedTime: checkoutContext.pickupTime,
+          pickupSlot: checkoutContext.pickupSlot,
+          deliverySlot: checkoutContext.deliverySlot,
+        },
+      );
     } else if (activeLocationCount > 0) {
       throw new BadRequestException(
         'Service not available in your area. Please share pickup address coordinates.',
@@ -80,13 +100,13 @@ export class OrdersService {
 
         if (!service) {
           throw new NotFoundException(
-            `Service not found: ${item.serviceId.toString()}`,
+            'Service not found: ' + item.serviceId.toString(),
           );
         }
 
         if (!service.isAvailable) {
           throw new BadRequestException(
-            `Service not available: ${service.name}`,
+            'Service not available: ' + service.name,
           );
         }
 
@@ -97,7 +117,6 @@ export class OrdersService {
         return {
           serviceId: item.serviceId,
           serviceName: service.name,
-          icon: service.icon,
           quantity: item.quantity,
           price: service.price,
         };
@@ -159,24 +178,20 @@ export class OrdersService {
     const filter = status ? { status } : {};
 
     const [data, total] = await Promise.all([
-      this.orderModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      this.orderModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
       this.orderModel.countDocuments(filter),
     ]);
 
-    return {
-      data,
-      total,
-      page,
-      limit,
-    };
+    return { data, total, page, limit };
   }
 
   // Get single order (owner only)
   async findById(orderId: string, userId: string) {
-    const order = await this.orderModel.findOne({
-      _id: orderId,
-      userId,
-    });
+    const order = await this.orderModel.findOne({ _id: orderId, userId });
 
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -201,7 +216,7 @@ export class OrdersService {
     return order.save();
   }
 
-  // Status transition rules (MATCHES YOUR ENUM)
+  // Status transition rules
   private isValidTransition(current: OrderStatus, next: OrderStatus): boolean {
     const transitions: Record<OrderStatus, OrderStatus[]> = {
       [OrderStatus.ORDER_PLACED]: [

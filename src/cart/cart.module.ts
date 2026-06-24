@@ -9,7 +9,6 @@ import {
 
 import { CartService } from './cart.service';
 import { CartController } from './cart.controller';
-import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
@@ -17,7 +16,6 @@ import { AuthModule } from '../auth/auth.module';
       { name: Cart.name, schema: CartSchema },
       { name: LaundryService.name, schema: LaundryServiceSchema },
     ]),
-    AuthModule,
   ],
   controllers: [CartController],
   providers: [CartService],

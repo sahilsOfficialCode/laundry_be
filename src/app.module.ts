@@ -1,8 +1,10 @@
 import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
+import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { LoggerMiddleware } from './logger.middleware';
 import { ServicesModule } from './services/services.module';
 import { OrdersModule } from './orders/orders.module';
@@ -10,6 +12,7 @@ import { CartModule } from './cart/cart.module';
 import { PaymentsModule } from './payments/payments.module';
 import { SupportModule } from './support/support.module';
 import { LocationsModule } from './locations/locations.module';
+import { ServiceZonesModule } from './service-zones/service-zones.module';
 
 @Module({
   imports: [
@@ -30,6 +33,13 @@ import { LocationsModule } from './locations/locations.module';
     PaymentsModule,
     SupportModule,
     LocationsModule,
+    ServiceZonesModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
+    },
   ],
 })
 export class AppModule implements NestModule {

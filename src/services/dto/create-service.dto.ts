@@ -11,9 +11,6 @@ import { IsString, IsNumber, IsOptional, IsBoolean, Min } from 'class-validator'
 //   @IsString()
 //   description: string;
 
-//   @IsOptional()
-//   @IsString()
-//   icon?: string;
 // }
 
 export class CreateServiceDto {
@@ -26,10 +23,6 @@ export class CreateServiceDto {
 
   @IsString()
   description?: string;
-
-  @IsOptional()
-  @IsString()
-  icon?: string;
 
   @IsOptional()
   @IsString()

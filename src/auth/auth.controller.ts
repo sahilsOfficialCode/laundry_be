@@ -5,23 +5,28 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  Req,
   Res,
-  UseGuards,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SendMobileOtpDto } from './dto/send-mobile-otp.dto';
 import { VerifyMobileOtpDto } from './dto/verify-mobile-otp.dto';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { GetUser } from './decorators/get-user.decorator';
+import { Public } from './decorators/public.decorator';
+import { TokenBlacklistService } from './token-blacklist.service';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(
+    private authService: AuthService,
+    private tokenBlacklistService: TokenBlacklistService,
+  ) {}
 
+  @Public()
   @HttpCode(HttpStatus.OK)
   @Post('login')
   async login(
@@ -42,12 +47,14 @@ export class AuthController {
     return result;
   }
 
+  @Public()
   @HttpCode(HttpStatus.OK)
   @Post('mobile/send-otp')
   async sendMobileOtp(@Body() sendMobileOtpDto: SendMobileOtpDto) {
     return this.authService.sendMobileOtp(sendMobileOtpDto);
   }
 
+  @Public()
   @HttpCode(HttpStatus.OK)
   @Post('mobile/verify-otp')
   async verifyMobileOtp(
@@ -69,7 +76,30 @@ export class AuthController {
 
   @HttpCode(HttpStatus.OK)
   @Post('logout')
-  async logout(@Res({ passthrough: true }) response: Response) {
+  async logout(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    // Extract the token from cookie or Authorization header and blacklist it
+    const token =
+      request.cookies?.access_token ??
+      request.headers.authorization?.split(' ')[1];
+
+    if (token) {
+      // Decode exp without full verification (token may already be expired)
+      try {
+        const [, payloadB64] = token.split('.');
+        const payload = JSON.parse(
+          Buffer.from(payloadB64, 'base64url').toString('utf8'),
+        );
+        const expiresAt = payload.exp ? payload.exp * 1000 : undefined;
+        this.tokenBlacklistService.revoke(token, expiresAt);
+      } catch {
+        // If decoding fails, revoke with default TTL
+        this.tokenBlacklistService.revoke(token);
+      }
+    }
+
     response.clearCookie('access_token', {
       httpOnly: true,
       secure: true,
@@ -78,12 +108,14 @@ export class AuthController {
     return { message: 'Logged out successfully' };
   }
 
+  @Public()
   @HttpCode(HttpStatus.OK)
   @Post('forgot-password')
   forgotPassword(@Body() forgotPasswordDto: ForgotPasswordDto) {
     return this.authService.forgotPassword(forgotPasswordDto);
   }
 
+  @Public()
   @HttpCode(HttpStatus.OK)
   @Post('reset-password')
   resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
@@ -92,7 +124,6 @@ export class AuthController {
 
   @HttpCode(HttpStatus.OK)
   @Get('me')
-  @UseGuards(JwtAuthGuard)
   async me(@GetUser() user: any) {
     return user;
   }

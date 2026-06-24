@@ -13,6 +13,7 @@ import {
 
 import { AuthModule } from '../auth/auth.module';
 import { LocationsModule } from '../locations/locations.module';
+import { ServiceZonesModule } from '../service-zones/service-zones.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { LocationsModule } from '../locations/locations.module';
     ]),
     AuthModule,
     LocationsModule,
+    ServiceZonesModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService],
