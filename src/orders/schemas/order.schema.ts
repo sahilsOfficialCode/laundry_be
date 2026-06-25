@@ -3,12 +3,13 @@ import { Document } from 'mongoose';
 
 export type OrderDocument = Order & Document;
 export enum OrderStatus {
-  ORDER_PLACED = 'ORDER_PLACED',
-  PICKUP_ASSIGNED = 'PICKUP_ASSIGNED',
-  PROCESSING = 'PROCESSING',
-  OUT_FOR_DELIVERY = 'OUT_FOR_DELIVERY',
-  COMPLETED = 'COMPLETED',
-  CANCELLED = 'CANCELLED',
+  ORDER_PLACED      = 'ORDER_PLACED',       // step 1 – Confirmed
+  PICKUP_ASSIGNED   = 'PICKUP_ASSIGNED',    // step 2 – Driver on the way
+  ITEMIZED          = 'ITEMIZED',           // step 3 – Items being weighed/counted
+  PROCESSING        = 'PROCESSING',         // step 4 – Clothes being cleaned
+  OUT_FOR_DELIVERY  = 'OUT_FOR_DELIVERY',   // step 5 – Delivered (awaiting OTP)
+  COMPLETED         = 'COMPLETED',          // step 5 – OTP confirmed
+  CANCELLED         = 'CANCELLED',
 }
 
 export enum PaymentStatus {
@@ -72,8 +73,38 @@ export class Order {
   @Prop()
   razorpayOrderId?: string;
 
+  /** Human-readable order number shown in the app, e.g. "LB20394" */
+  @Prop({ unique: true, sparse: true })
+  orderNumber?: string;
+
   @Prop()
   razorpayPaymentId?: string;
+
+  // ── Tracking fields ────────────────────────────────────────────────────────
+
+  /** Assigned driver name — set when status → PICKUP_ASSIGNED */
+  @Prop({ required: false })
+  driverName?: string;
+
+  /** Assigned driver phone — set when status → PICKUP_ASSIGNED */
+  @Prop({ required: false })
+  driverPhone?: string;
+
+  /** 4-digit OTP auto-generated when status → OUT_FOR_DELIVERY */
+  @Prop({ required: false })
+  deliveryOtp?: string;
+
+  /** Weight in kg — set by admin when status → ITEMIZED */
+  @Prop({ required: false })
+  weightKg?: number;
+
+  /** Item count — set by admin when status → ITEMIZED */
+  @Prop({ required: false })
+  itemCount?: number;
+
+  /** Bill amount after itemization — may differ from original totalAmount */
+  @Prop({ required: false })
+  billAmount?: number;
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);

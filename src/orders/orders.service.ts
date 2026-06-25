@@ -13,6 +13,7 @@ import {
   LaundryServiceDocument,
 } from '../services/schemas/service.schema';
 import { CheckoutContextDto } from './dto/checkout-context.dto';
+import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { LocationsService } from '../locations/locations.service';
 import { ServiceZonesService } from '../service-zones/service-zones.service';
 
@@ -138,6 +139,7 @@ export class OrdersService {
       items: orderItems,
       totalAmount,
       status: OrderStatus.ORDER_PLACED,
+      orderNumber: 'LB' + Date.now().toString().slice(-5),
       locationId: assignedLocation?._id?.toString(),
       locationSnapshot: assignedLocation
         ? {
@@ -195,44 +197,79 @@ export class OrdersService {
   // Get single order (owner only)
   async findById(orderId: string, userId: string) {
     const order = await this.orderModel.findOne({ _id: orderId, userId });
-
-    if (!order) {
-      throw new NotFoundException('Order not found');
-    }
-
+    if (!order) throw new NotFoundException('Order not found');
     return order;
   }
 
-  // ADMIN: Update status
-  async updateStatus(orderId: string, status: OrderStatus) {
+  // Get single order (admin — no ownership check)
+  async findByIdAdmin(orderId: string) {
     const order = await this.orderModel.findById(orderId);
+    if (!order) throw new NotFoundException('Order not found');
+    return order;
+  }
 
-    if (!order) {
-      throw new NotFoundException('Order not found');
+  // ADMIN: Update status with optional tracking fields
+  async updateStatus(orderId: string, dto: UpdateOrderStatusDto) {
+    const order = await this.orderModel.findById(orderId);
+    if (!order) throw new NotFoundException('Order not found');
+
+    if (!this.isValidTransition(order.status, dto.status)) {
+      throw new BadRequestException(
+        `Cannot transition from ${order.status} to ${dto.status}`,
+      );
     }
 
-    if (!this.isValidTransition(order.status, status)) {
-      throw new BadRequestException('Invalid status transition');
+    order.status = dto.status;
+
+    // PICKUP_ASSIGNED → set driver details
+    if (dto.status === OrderStatus.PICKUP_ASSIGNED) {
+      if (dto.driverName)  order.driverName  = dto.driverName.trim();
+      if (dto.driverPhone) order.driverPhone = dto.driverPhone.trim();
     }
 
-    order.status = status;
+    // ITEMIZED → set weight / item count / bill
+    if (dto.status === OrderStatus.ITEMIZED) {
+      if (dto.weightKg  != null) order.weightKg  = dto.weightKg;
+      if (dto.itemCount != null) order.itemCount  = dto.itemCount;
+      if (dto.billAmount != null) order.billAmount = dto.billAmount;
+    }
+
+    // OUT_FOR_DELIVERY → auto-generate 4-digit OTP
+    if (dto.status === OrderStatus.OUT_FOR_DELIVERY) {
+      order.deliveryOtp = String(Math.floor(1000 + Math.random() * 9000));
+    }
+
+    return order.save();
+  }
+
+  // USER: Confirm delivery with OTP
+  async confirmDelivery(orderId: string, otp: string, userId: string) {
+    const order = await this.orderModel.findOne({ _id: orderId, userId });
+    if (!order) throw new NotFoundException('Order not found');
+
+    if (order.status !== OrderStatus.OUT_FOR_DELIVERY) {
+      throw new BadRequestException('Order is not awaiting delivery confirmation');
+    }
+
+    if (order.deliveryOtp !== otp.trim()) {
+      throw new BadRequestException('Invalid OTP. Please check with your delivery partner.');
+    }
+
+    order.status = OrderStatus.COMPLETED;
     return order.save();
   }
 
   // Status transition rules
   private isValidTransition(current: OrderStatus, next: OrderStatus): boolean {
     const transitions: Record<OrderStatus, OrderStatus[]> = {
-      [OrderStatus.ORDER_PLACED]: [
-        OrderStatus.PICKUP_ASSIGNED,
-        OrderStatus.CANCELLED,
-      ],
-      [OrderStatus.PICKUP_ASSIGNED]: [OrderStatus.PROCESSING],
-      [OrderStatus.PROCESSING]: [OrderStatus.OUT_FOR_DELIVERY],
+      [OrderStatus.ORDER_PLACED]:     [OrderStatus.PICKUP_ASSIGNED, OrderStatus.CANCELLED],
+      [OrderStatus.PICKUP_ASSIGNED]:  [OrderStatus.ITEMIZED, OrderStatus.CANCELLED],
+      [OrderStatus.ITEMIZED]:         [OrderStatus.PROCESSING],
+      [OrderStatus.PROCESSING]:       [OrderStatus.OUT_FOR_DELIVERY],
       [OrderStatus.OUT_FOR_DELIVERY]: [OrderStatus.COMPLETED],
-      [OrderStatus.COMPLETED]: [],
-      [OrderStatus.CANCELLED]: [],
+      [OrderStatus.COMPLETED]:        [],
+      [OrderStatus.CANCELLED]:        [],
     };
-
-    return transitions[current]?.includes(next) || false;
+    return transitions[current]?.includes(next) ?? false;
   }
 }

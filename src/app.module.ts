@@ -13,6 +13,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { SupportModule } from './support/support.module';
 import { LocationsModule } from './locations/locations.module';
 import { ServiceZonesModule } from './service-zones/service-zones.module';
+import { StandardTimeSlotsModule } from './standard-time-slots/standard-time-slots.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { ServiceZonesModule } from './service-zones/service-zones.module';
     SupportModule,
     LocationsModule,
     ServiceZonesModule,
+    StandardTimeSlotsModule,
   ],
   providers: [
     {

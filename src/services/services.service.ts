@@ -34,7 +34,6 @@ export class ServicesService {
         .exec();
       
       const total = await this.serviceModel.countDocuments(query);
-      console.log("<><>total",total)
       return {
         data,
         total,

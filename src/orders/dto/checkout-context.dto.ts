@@ -7,6 +7,7 @@ import {
   Max,
   Min,
   IsNumber,
+  ValidateIf,
 } from 'class-validator';
 
 export class CheckoutContextDto {
@@ -37,6 +38,7 @@ export class CheckoutContextDto {
   pickupDate?: string;
 
   @IsOptional()
+  @ValidateIf((o) => o.pickupTime !== undefined && o.pickupTime !== null && o.pickupTime !== '')
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   pickupTime?: string;
 

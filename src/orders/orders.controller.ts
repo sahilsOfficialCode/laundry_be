@@ -7,6 +7,8 @@ import {
   Body,
   UseGuards,
   Query,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 
 import { OrdersService } from './orders.service';
@@ -44,8 +46,14 @@ export class OrdersController {
     return this.ordersService.findMyOrders(user.sub);
   }
 
+  /**
+   * GET /orders/:id  — user sees own order; admin sees any order.
+   */
   @Get(':id')
   async getOrderById(@Param('id') orderId: string, @GetUser() user: any) {
+    if (user?.role === UserRole.ADMIN) {
+      return this.ordersService.findByIdAdmin(orderId);
+    }
     return this.ordersService.findById(orderId, user.sub);
   }
 
@@ -55,6 +63,20 @@ export class OrdersController {
     @Param('id') orderId: string,
     @Body() dto: UpdateOrderStatusDto,
   ) {
-    return this.ordersService.updateStatus(orderId, dto.status);
+    return this.ordersService.updateStatus(orderId, dto);
+  }
+
+  /**
+   * POST /orders/:id/confirm-delivery
+   * User confirms delivery by entering the 4-digit OTP shown by the driver.
+   */
+  @Post(':id/confirm-delivery')
+  @HttpCode(HttpStatus.OK)
+  async confirmDelivery(
+    @Param('id') orderId: string,
+    @Body('otp') otp: string,
+    @GetUser() user: any,
+  ) {
+    return this.ordersService.confirmDelivery(orderId, otp, user.sub);
   }
 }
