@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -163,8 +164,39 @@ export class UsersService {
     });
   }
 
+  async findAll(): Promise<any[]> {
+    return this.userModel.find().select('-password').sort({ createdAt: -1 });
+  }
+
   async findById(id: string): Promise<any> {
     return this.userModel.findById(id).select('-password');
+  }
+
+  async blockUser(id: string): Promise<any> {
+    const user = await this.userModel
+      .findByIdAndUpdate(id, { isActive: false }, { new: true })
+      .select('-password');
+    if (!user) throw new NotFoundException('User not found');
+    return user;
+  }
+
+  async unblockUser(id: string): Promise<any> {
+    const user = await this.userModel
+      .findByIdAndUpdate(id, { isActive: true }, { new: true })
+      .select('-password');
+    if (!user) throw new NotFoundException('User not found');
+    return user;
+  }
+
+  async changeRole(id: string, role: UserRole): Promise<any> {
+    if (role === UserRole.ADMIN) {
+      throw new BadRequestException('Cannot assign admin role via this endpoint');
+    }
+    const user = await this.userModel
+      .findByIdAndUpdate(id, { role }, { new: true })
+      .select('-password');
+    if (!user) throw new NotFoundException('User not found');
+    return user;
   }
 
   async updateProfileName(userId: string, name?: string): Promise<any> {
@@ -189,6 +221,7 @@ export class UsersService {
     filter: GetAddressesFilterDto = {},
   ): Promise<{ data: UserAddress[]; total: number; page: number; limit: number }> {
     const user = await this.userModel.findById(userId).select('addresses');
+    console.log('user addresses:', user?.addresses);
     if (!user) {
       throw new BadRequestException('User not found');
     }
@@ -380,19 +413,4 @@ export class UsersService {
     };
   }
 
-  async findAll(): Promise<any[]> {
-    return this.userModel.find().select('-password').sort({ createdAt: -1 });
-  }
-
-  async blockUser(id: string): Promise<any> {
-    return this.userModel
-      .findByIdAndUpdate(id, { isActive: false }, { new: true })
-      .select('-password');
-  }
-
-  async unblockUser(id: string): Promise<any> {
-    return this.userModel
-      .findByIdAndUpdate(id, { isActive: true }, { new: true })
-      .select('-password');
-  }
 }

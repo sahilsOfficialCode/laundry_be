@@ -3,8 +3,9 @@ import { Document } from 'mongoose';
 
 export type UserDocument = User & Document;
 export enum UserRole {
-  ADMIN = 'admin',
-  USER = 'user',
+  ADMIN            = 'admin',
+  USER             = 'user',
+  DELIVERY_PARTNER = 'delivery_partner',
 }
 
 export class UserAddress {

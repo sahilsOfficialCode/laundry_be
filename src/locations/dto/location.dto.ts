@@ -117,8 +117,9 @@ export class CreateLocationDto {
   @MaxLength(300)
   fullAddress: string;
 
-  @Matches(/^\+?[0-9]{8,15}$/)
-  contactNumber: string;
+  @IsOptional()
+  @Matches(/^\+?[0-9]{8,15}$/, { message: 'contactNumber must be 8–15 digits, optionally prefixed with +' })
+  contactNumber?: string;
 
   @IsDefined({ message: 'geoPoint is required' })
   @Validate(IsValidBranchGeoPointConstraint)
@@ -162,7 +163,7 @@ export class CreateLocationDto {
 
   @Type(() => Number)
   @IsInt()
-  @Min(1)
+  @Min(0)
   @Max(5000)
   dailyBookingLimit: number;
 
@@ -252,7 +253,7 @@ export class UpdateLocationDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
-  @Min(1)
+  @Min(0)
   @Max(5000)
   dailyBookingLimit?: number;
 

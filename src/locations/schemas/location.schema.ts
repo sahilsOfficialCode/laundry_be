@@ -63,8 +63,8 @@ export class Location {
   @Prop({ required: true, trim: true })
   fullAddress: string;
 
-  @Prop({ required: true, trim: true })
-  contactNumber: string;
+  @Prop({ required: false, trim: true })
+  contactNumber?: string;
 
   @Prop({
     type: {
@@ -125,7 +125,12 @@ export class Location {
   @Prop({ type: [TimeSlotSchema], default: [] })
   deliverySlots: TimeSlot[];
 
-  @Prop({ required: true, min: 1, default: 200 })
+  /**
+   * Maximum orders per day for this location.
+   * Set to 0 for unlimited (no cap enforced).
+   * Default 200 — set to 0 if you don't want any restriction.
+   */
+  @Prop({ required: true, min: 0, default: 0 })
   dailyBookingLimit: number;
 
   @Prop({ required: false, trim: true })
@@ -141,6 +146,6 @@ export class Location {
 export const LocationSchema = SchemaFactory.createForClass(Location);
 
 LocationSchema.index({ geoPoint: '2dsphere' });
-LocationSchema.index({ servicePolygon: '2dsphere' });
+LocationSchema.index({ servicePolygon: '2dsphere' }, { sparse: true });
 LocationSchema.index({ city: 1, isActive: 1 });
 LocationSchema.index({ shopName: 1 });

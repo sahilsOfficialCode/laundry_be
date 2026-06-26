@@ -95,9 +95,13 @@ export class LocationsController {
   }
 
   /**
-   * GET /locations/serviceability?latitude=&longitude=&date=&city=
+   * GET /locations/serviceability?latitude=&longitude=&date=&city=&preferredLocationId=
    * Public — returns the nearest eligible branch's slots and payment methods.
    * Used by the frontend checkout flow.
+   *
+   * Optional preferredLocationId: when supplied the resolver promotes that
+   * branch to the top of the candidate list (e.g. user already picked a shop
+   * in the "Drop at Shop" flow and we want its specific slots).
    */
   @Public()
   @Get('serviceability')
@@ -106,13 +110,20 @@ export class LocationsController {
     @Query('longitude') longitude: string,
     @Query('date') date: string,
     @Query('city') city?: string,
+    @Query('preferredLocationId') preferredLocationId?: string,
   ) {
     const lat = parseFloat(latitude);
     const lng = parseFloat(longitude);
     if (isNaN(lat) || isNaN(lng)) {
       throw new BadRequestException('latitude and longitude are required');
     }
-    return this.locationsService.getServiceability(lat, lng, date ?? new Date().toISOString().slice(0, 10), city);
+    return this.locationsService.getServiceability(
+      lat,
+      lng,
+      date ?? new Date().toISOString().slice(0, 10),
+      city,
+      preferredLocationId,
+    );
   }
 
   /**
@@ -181,6 +192,23 @@ export class LocationsController {
     @GetUser() actor: any,
   ) {
     return this.locationsService.setLocationStatus(locationId, dto, actor);
+  }
+
+  /**
+   * GET /locations/:id/capacity?date=YYYY-MM-DD
+   * Returns today's booking count vs. the daily limit for the admin panel.
+   * Response: { limit, usedToday, remainingToday, isUnlimited, isFull }
+   */
+  @Get(':id/capacity')
+  @Roles(UserRole.ADMIN)
+  async getCapacity(
+    @Param('id') locationId: string,
+    @Query('date') date: string,
+  ) {
+    return this.locationsService.getCapacityStats(
+      locationId,
+      date ?? new Date().toISOString().slice(0, 10),
+    );
   }
 
   @Get(':id/closures')

@@ -16,6 +16,7 @@ import {
   CreateStandardTimeSlotDto,
   UpdateStandardTimeSlotDto,
 } from './dto/standard-time-slot.dto';
+import { Order, OrderDocument, OrderStatus } from '../orders/schemas/order.schema';
 
 /** Instant option injected into the slot list at runtime (never persisted). */
 export const INSTANT_SLOT = {
@@ -53,11 +54,32 @@ function toDayKey(date: Date): DayOfWeek {
   return ALL_DAYS[day === 0 ? 6 : day - 1];
 }
 
+/**
+ * Returns the current HH:MM time string in IST (UTC+5:30).
+ * Used to filter out slots whose end time has already passed today.
+ */
+function currentTimeIST(): string {
+  const nowMs = Date.now() + 5.5 * 60 * 60 * 1000; // shift to IST
+  const h = Math.floor((nowMs / (60 * 60 * 1000)) % 24);
+  const m = Math.floor((nowMs / (60 * 1000)) % 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/**
+ * Returns today's date as a YYYY-MM-DD string in IST.
+ */
+function todayIST(): string {
+  const nowMs = Date.now() + 5.5 * 60 * 60 * 1000;
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
+
 @Injectable()
 export class StandardTimeSlotsService {
   constructor(
     @InjectModel(StandardTimeSlot.name)
     private readonly slotModel: Model<StandardTimeSlotDocument>,
+    @InjectModel(Order.name)
+    private readonly orderModel: Model<OrderDocument>,
   ) {}
 
   // ── Admin CRUD ─────────────────────────────────────────────────────────────
@@ -122,33 +144,176 @@ export class StandardTimeSlotsService {
     return { deleted: true };
   }
 
-  async setActive(id: string, isActive: boolean) {
-    return this.update(id, { isActive });
+  /**
+   * Activate or deactivate a slot.
+   *
+   * When deactivating with a grace period (`graceMinutes > 0`), the slot stays
+   * visible to users who are currently in the booking flow for that many minutes
+   * before actually disappearing. This prevents users mid-checkout from losing
+   * their selected slot due to an admin action.
+   *
+   * Activating always clears any pending grace period immediately.
+   */
+  async setActive(id: string, isActive: boolean, graceMinutes = 0) {
+    const slot = await this.slotModel.findById(id).exec();
+    if (!slot) throw new NotFoundException('Time slot not found');
+
+    slot.isActive = isActive;
+
+    if (!isActive && graceMinutes > 0) {
+      // Slot stays visible in getAvailable until effectiveUntil elapses
+      slot.effectiveUntil = new Date(Date.now() + graceMinutes * 60 * 1000);
+    } else {
+      // Activate immediately, or deactivate now with no grace
+      slot.effectiveUntil = null as any;
+    }
+
+    return slot.save();
+  }
+
+  // ── Admin stats ────────────────────────────────────────────────────────────
+
+  /**
+   * Returns all slots with order counts for the requested date.
+   * Used by the admin Time Slots page to show slot utilisation.
+   */
+  async getStats(date: string) {
+    const requestedDate = date ? new Date(date) : new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+
+    // Day boundaries in UTC (YYYY-MM-DD 00:00:00Z → 23:59:59.999Z)
+    const dayStart = new Date(requestedDate.toISOString().slice(0, 10) + 'T00:00:00.000Z');
+    const dayEnd   = new Date(requestedDate.toISOString().slice(0, 10) + 'T23:59:59.999Z');
+
+    // Aggregate orders grouped by pickupSlot label for that day
+    const orderCounts: { _id: string; count: number }[] = await this.orderModel
+      .aggregate([
+        {
+          $match: {
+            pickupDate: { $gte: dayStart, $lte: dayEnd },
+            status: { $ne: OrderStatus.CANCELLED },
+          },
+        },
+        {
+          $group: {
+            _id: '$pickupSlot',
+            count: { $sum: 1 },
+          },
+        },
+      ])
+      .exec();
+
+    const countMap = new Map(orderCounts.map((r) => [r._id?.toLowerCase(), r.count]));
+
+    const slots = await this.slotModel
+      .find()
+      .sort({ sortOrder: 1, startTime: 1 })
+      .lean()
+      .exec();
+
+    return slots.map((s) => ({
+      _id: String(s._id),
+      label: s.label,
+      startTime: s.startTime,
+      endTime: s.endTime,
+      type: s.type,
+      daysAvailable: s.daysAvailable,
+      capacity: s.capacity ?? null,
+      expectedTurnaround: s.expectedTurnaround ?? null,
+      isActive: s.isActive,
+      effectiveUntil: s.effectiveUntil ?? null,
+      sortOrder: s.sortOrder,
+      orderCount: countMap.get(s.label?.toLowerCase()) ?? 0,
+    }));
   }
 
   // ── User-facing: available slots for a date ────────────────────────────────
 
   /**
    * Returns pickup slots, delivery slots, and the instant option for a given date.
-   * The instant option is always prepended to both pickup and delivery lists.
+   *
+   * Two extra rules applied on top of basic isActive filtering:
+   *
+   * 1. PAST-TIME FILTER: When the requested date is today (in IST), slots whose
+   *    end time has already passed are excluded. Example: if it is 14:30 IST and
+   *    a slot ends at 13:00, it will not appear.
+   *
+   * 2. GRACE PERIOD: A slot that was deactivated with a grace period (isActive=false
+   *    but effectiveUntil is in the future) is still shown until the grace expires.
+   *    This prevents users mid-checkout from losing a slot due to an admin toggle.
    */
   async getAvailable(date: string) {
     const requestedDate = date ? new Date(date) : new Date();
     const dayKey = toDayKey(requestedDate);
+    const now = new Date();
 
+    // Decide whether to apply past-time filtering
+    const dateStr = date || todayIST();
+    const isToday  = dateStr === todayIST();
+    const currentTime = currentTimeIST(); // HH:MM in IST
+
+    // Fetch active slots + slots still within their grace period
     const slots = await this.slotModel
-      .find({ isActive: true, daysAvailable: dayKey })
+      .find({
+        daysAvailable: dayKey,
+        $or: [
+          { isActive: true },
+          // Grace period: was deactivated but effectiveUntil hasn't passed yet
+          { isActive: false, effectiveUntil: { $gt: now } },
+        ],
+      })
       .sort({ sortOrder: 1, startTime: 1 })
       .lean()
       .exec();
 
-    const adminPickup = slots
-      .filter((s) => s.type === SlotType.PICKUP || s.type === SlotType.BOTH)
-      .map(this.toPublicSlot);
+    // Filter out past slots when the requested date is today
+    const timePassed = isToday
+      ? slots.filter((s) => s.endTime > currentTime)
+      : slots;
 
-    const adminDelivery = slots
+    // ── Capacity filter ────────────────────────────────────────────────────────
+    // For slots that have a capacity set, count how many orders are already
+    // booked for that slot on the requested date. Remove full slots so users
+    // cannot select them. Remaining capacity is attached to the public slot.
+    const dayISO = (date || todayIST());
+    const dayStart = new Date(dayISO + 'T00:00:00.000Z');
+    const dayEnd   = new Date(dayISO + 'T23:59:59.999Z');
+
+    // Collect the labels of capacity-limited slots to run one aggregate query.
+    const cappedLabels = timePassed
+      .filter((s) => s.capacity != null && s.capacity > 0)
+      .map((s) => s.label);
+
+    let slotOrderCounts: Map<string, number> = new Map();
+    if (cappedLabels.length > 0) {
+      const counts: { _id: string; count: number }[] = await this.orderModel
+        .aggregate([
+          {
+            $match: {
+              pickupDate: { $gte: dayStart, $lte: dayEnd },
+              pickupSlot: { $in: cappedLabels },
+              status: { $ne: 'CANCELLED' },
+            },
+          },
+          { $group: { _id: '$pickupSlot', count: { $sum: 1 } } },
+        ])
+        .exec();
+      slotOrderCounts = new Map(counts.map((r) => [r._id, r.count]));
+    }
+
+    // Keep only slots that still have room (or have no cap).
+    const filteredSlots = timePassed.filter((s) => {
+      if (s.capacity == null || s.capacity <= 0) return true; // no cap
+      const booked = slotOrderCounts.get(s.label) ?? 0;
+      return booked < s.capacity;
+    });
+
+    const adminPickup = filteredSlots
+      .filter((s) => s.type === SlotType.PICKUP || s.type === SlotType.BOTH)
+      .map((s) => this.toPublicSlot(s, slotOrderCounts.get(s.label)));
+
+    const adminDelivery = filteredSlots
       .filter((s) => s.type === SlotType.DELIVERY || s.type === SlotType.BOTH)
-      .map(this.toPublicSlot);
+      .map((s) => this.toPublicSlot(s, slotOrderCounts.get(s.label)));
 
     // If admin has not created any slots yet, fall back to a "Full Day" default.
     // Once admin adds slots the default is replaced automatically.
@@ -160,7 +325,9 @@ export class StandardTimeSlotsService {
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
-  private toPublicSlot(s: any) {
+  private toPublicSlot(s: any, bookedCount?: number) {
+    const cap = s.capacity ?? null;
+    const booked = bookedCount ?? 0;
     return {
       _id: String(s._id),
       label: s.label,
@@ -169,7 +336,8 @@ export class StandardTimeSlotsService {
       type: s.type,
       isInstant: false,
       expectedTurnaround: s.expectedTurnaround ?? null,
-      capacity: s.capacity ?? null,
+      capacity: cap,
+      remainingCapacity: cap != null && cap > 0 ? Math.max(0, cap - booked) : null,
     };
   }
 

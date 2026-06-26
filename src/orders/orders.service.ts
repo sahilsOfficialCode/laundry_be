@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, isValidObjectId } from 'mongoose';
 
 import { Order, OrderDocument, OrderStatus } from './schemas/order.schema';
 import { Cart, CartDocument } from '../cart/schemas/cart.schema';
@@ -12,10 +12,17 @@ import {
   LaundryService,
   LaundryServiceDocument,
 } from '../services/schemas/service.schema';
+import {
+  StandardTimeSlot,
+  StandardTimeSlotDocument,
+} from '../standard-time-slots/schemas/standard-time-slot.schema';
 import { CheckoutContextDto } from './dto/checkout-context.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { LocationsService } from '../locations/locations.service';
 import { ServiceZonesService } from '../service-zones/service-zones.service';
+
+/** Labels that are never subject to slot-level capacity checks. */
+const OPEN_SLOT_LABELS = new Set(['instant', 'full day', 'full-day']);
 
 @Injectable()
 export class OrdersService {
@@ -28,6 +35,9 @@ export class OrdersService {
 
     @InjectModel(LaundryService.name)
     private serviceModel: Model<LaundryServiceDocument>,
+
+    @InjectModel(StandardTimeSlot.name)
+    private standardSlotModel: Model<StandardTimeSlotDocument>,
 
     private readonly locationsService: LocationsService,
     private readonly serviceZonesService: ServiceZonesService,
@@ -66,6 +76,21 @@ export class OrdersService {
     const activeLocationCount =
       await this.locationsService.countActiveLocations();
 
+    // Guard: 'default' and any non-ObjectId string come from the frontend's
+    // CheckoutOptions.assumed() fallback — they mean the serviceability check
+    // failed before the order was placed. Reject early with a clear message
+    // instead of letting an invalid ID propagate into a $geoNear query crash.
+    const rawLocationId = checkoutContext.locationId;
+    const preferredLocationId =
+      rawLocationId && isValidObjectId(rawLocationId) ? rawLocationId : undefined;
+
+    if (rawLocationId && !preferredLocationId) {
+      throw new BadRequestException(
+        'Service is not available at your location yet. ' +
+        'Please verify your address and try again.',
+      );
+    }
+
     if (
       checkoutContext.pickupLatitude != null &&
       checkoutContext.pickupLongitude != null
@@ -77,13 +102,47 @@ export class OrdersService {
           latitude: checkoutContext.pickupLatitude,
           longitude: checkoutContext.pickupLongitude,
           city: checkoutContext.city,
-          preferredLocationId: checkoutContext.locationId,
+          preferredLocationId,
           requestedDate,
           requestedTime: checkoutContext.pickupTime,
           pickupSlot: checkoutContext.pickupSlot,
           deliverySlot: checkoutContext.deliverySlot,
         },
       );
+
+      // ── Standard slot capacity check ─────────────────────────────────────────
+      // If the user selected a standard (admin-managed) pickup slot that has a
+      // capacity set, verify that slot still has room. This is a belt-and-
+      // suspenders check — the /standard-time-slots/available endpoint already
+      // hides full slots, but we re-validate at order creation to handle race
+      // conditions (two users booking the last spot at the same time).
+      if (
+        checkoutContext.pickupSlot &&
+        !OPEN_SLOT_LABELS.has(checkoutContext.pickupSlot.trim().toLowerCase())
+      ) {
+        const stdSlot = await this.standardSlotModel
+          .findOne({ label: checkoutContext.pickupSlot })
+          .lean()
+          .exec();
+
+        if (stdSlot && stdSlot.capacity && stdSlot.capacity > 0) {
+          const dateISO = new Date(requestedDate).toISOString().slice(0, 10);
+          const dayStart = new Date(dateISO + 'T00:00:00.000Z');
+          const dayEnd   = new Date(dateISO + 'T23:59:59.999Z');
+
+          const slotBookedCount = await this.orderModel.countDocuments({
+            pickupDate: { $gte: dayStart, $lte: dayEnd },
+            pickupSlot: checkoutContext.pickupSlot,
+            status: { $ne: OrderStatus.CANCELLED },
+          });
+
+          if (slotBookedCount >= stdSlot.capacity) {
+            throw new BadRequestException(
+              `The "${checkoutContext.pickupSlot}" slot is fully booked for today. Please choose a different slot.`,
+            );
+          }
+        }
+      }
     } else if (activeLocationCount > 0) {
       throw new BadRequestException(
         'Service not available in your area. Please share pickup address coordinates.',
@@ -163,9 +222,12 @@ export class OrdersService {
         checkoutContext.pickupLongitude != null
           ? [checkoutContext.pickupLongitude, checkoutContext.pickupLatitude]
           : undefined,
+      // Seed status history with the initial placement event
+      statusHistory: [{ status: OrderStatus.ORDER_PLACED, timestamp: new Date() }],
     });
 
     return order.save();
+  
   }
 
   async clearCart(userId: string) {
@@ -221,6 +283,12 @@ export class OrdersService {
 
     order.status = dto.status;
 
+    // Record timestamp for this status change
+    order.statusHistory = [
+      ...(order.statusHistory ?? []),
+      { status: dto.status, timestamp: new Date() },
+    ];
+
     // PICKUP_ASSIGNED → set driver details
     if (dto.status === OrderStatus.PICKUP_ASSIGNED) {
       if (dto.driverName)  order.driverName  = dto.driverName.trim();
@@ -234,11 +302,53 @@ export class OrdersService {
       if (dto.billAmount != null) order.billAmount = dto.billAmount;
     }
 
-    // OUT_FOR_DELIVERY → auto-generate 4-digit OTP
+    // OUT_FOR_DELIVERY → auto-generate 4-digit OTP + tracking fields
     if (dto.status === OrderStatus.OUT_FOR_DELIVERY) {
       order.deliveryOtp = String(Math.floor(1000 + Math.random() * 9000));
+      if (dto.etaMinutes       != null) order.etaMinutes       = dto.etaMinutes;
+      if (dto.driverDistanceKm != null) order.driverDistanceKm = dto.driverDistanceKm;
     }
 
+    return order.save();
+  }
+
+  // USER: Get order stats summary
+  async getMyOrdersSummary(userId: string) {
+    const [activeCount, completedCount, cancelledCount, completedOrders] =
+      await Promise.all([
+        this.orderModel.countDocuments({
+          userId,
+          status: { $nin: [OrderStatus.COMPLETED, OrderStatus.CANCELLED] },
+        }),
+        this.orderModel.countDocuments({ userId, status: OrderStatus.COMPLETED }),
+        this.orderModel.countDocuments({ userId, status: OrderStatus.CANCELLED }),
+        this.orderModel
+          .find({ userId, status: OrderStatus.COMPLETED }, { totalAmount: 1 })
+          .lean(),
+      ]);
+
+    // totalSaved: 10% of all completed orders' totals (loyalty savings estimate)
+    const totalSaved = Math.round(
+      completedOrders.reduce((sum, o) => sum + (o.totalAmount ?? 0), 0) * 0.1,
+    );
+
+    return { activeCount, completedCount, cancelledCount, totalSaved };
+  }
+
+  // USER: Rate a completed order
+  async rateOrder(
+    orderId: string,
+    userId: string,
+    rating: number,
+    comment?: string,
+  ) {
+    const order = await this.orderModel.findOne({ _id: orderId, userId });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.status !== OrderStatus.COMPLETED) {
+      throw new BadRequestException('Only completed orders can be rated');
+    }
+    order.rating = rating;
+    if (comment) order.ratingComment = comment.trim();
     return order.save();
   }
 
@@ -256,6 +366,10 @@ export class OrdersService {
     }
 
     order.status = OrderStatus.COMPLETED;
+    order.statusHistory = [
+      ...(order.statusHistory ?? []),
+      { status: OrderStatus.COMPLETED, timestamp: new Date() },
+    ];
     return order.save();
   }
 

@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -76,7 +77,7 @@ export type LocationResolutionResult = {
 };
 
 @Injectable()
-export class LocationsService {
+export class LocationsService implements OnModuleInit {
   private readonly logger = new Logger(LocationsService.name);
 
   constructor(
@@ -89,6 +90,25 @@ export class LocationsService {
     @InjectModel(Order.name)
     private readonly orderModel: Model<OrderDocument>,
   ) {}
+
+  /**
+   * Ensure the 2dsphere index on geoPoint exists at startup.
+   * Mongoose defines it in the schema but does NOT create it automatically
+   * when the collection already exists (e.g. legacy data or autoIndex:false).
+   * Without this index every $geoNear aggregation throws MongoError code 291.
+   */
+  async onModuleInit() {
+    try {
+      await this.locationModel.syncIndexes();
+      this.logger.log('Location indexes synced (2dsphere on geoPoint confirmed)');
+    } catch (err: any) {
+      this.logger.error(
+        'Failed to sync location indexes — $geoNear queries will fail. ' +
+        'Run: db.locations.createIndex({ geoPoint: "2dsphere" }) manually.',
+        err?.message,
+      );
+    }
+  }
 
   async createLocation(dto: CreateLocationDto, actor: RequestActor) {
     const normalized = this.normalizeLocationPayload(dto);
@@ -392,28 +412,90 @@ export class LocationsService {
     return this.locationModel.countDocuments({ isActive: true }).exec();
   }
 
+  /**
+   * Returns today's booking usage for a location:
+   *   { limit, usedToday, remainingToday, isUnlimited }
+   * Used by the admin panel to show capacity at a glance.
+   */
+  async getCapacityStats(locationId: string, date: string) {
+    const location = await this.findLocationById(locationId);
+    const requestedDate = date ? new Date(date) : new Date();
+    const dayStart = startOfDay(requestedDate);
+    const dayEnd   = endOfDay(requestedDate);
+
+    const usedToday = await this.orderModel.countDocuments({
+      locationId,
+      pickupDate: { $gte: dayStart, $lte: dayEnd },
+      status: { $ne: 'CANCELLED' },
+    });
+
+    const limit = location.dailyBookingLimit ?? 0;
+    const isUnlimited = limit === 0;
+
+    return {
+      locationId,
+      date: requestedDate.toISOString().slice(0, 10),
+      limit,
+      usedToday,
+      remainingToday: isUnlimited ? null : Math.max(0, limit - usedToday),
+      isUnlimited,
+      isFull: !isUnlimited && usedToday >= limit,
+    };
+  }
+
   // ── Serviceability endpoint ────────────────────────────────────────────────
 
   /**
    * Returns the nearest eligible location's slots and payment methods for
    * the given coordinates/date. Used by the frontend checkout flow.
+   *
+   * preferredLocationId: when supplied, that branch is evaluated first so its
+   * slots are returned even when it is not the geographically nearest one.
+   * Used by the "Drop at Shop" flow after the user selects a specific branch.
    */
   async getServiceability(
     latitude: number,
     longitude: number,
     date: string,
     city?: string,
+    preferredLocationId?: string,
   ) {
     const resolved = await this.resolveLocation({
       latitude,
       longitude,
       city,
       requestedDate: date,
+      preferredLocationId,
     });
 
     const loc = resolved.selectedLocation;
     if (!loc) {
-      return null;
+      const firstReason = resolved.reasons[0];
+      const reasonCode = firstReason?.code ?? 'SERVICE_NOT_AVAILABLE_IN_AREA';
+
+      // When the shop EXISTS but is temporarily unavailable (capacity reached,
+      // closed today, etc.), include basic shop info so the frontend can still
+      // enable "Proceed to Pay". The backend will re-validate at order creation.
+      // Do NOT include the shop when the user is simply outside any service area.
+      const nearestSuggestion = resolved.suggestions?.[0];
+      const nearestShop = reasonCode !== 'SERVICE_NOT_AVAILABLE_IN_AREA' && nearestSuggestion
+        ? {
+            _id:           String(nearestSuggestion._id),
+            shopName:      nearestSuggestion.shopName,
+            fullAddress:   nearestSuggestion.fullAddress,
+            city:          nearestSuggestion.city,
+            contactNumber: nearestSuggestion.contactNumber ?? null,
+            isOpen:        false,
+            recommended:   false,
+          }
+        : null;
+
+      return {
+        eligible: false,
+        reasonCode,
+        reason: firstReason?.message ?? 'No laundry service is available at your address yet',
+        ...(nearestShop && { nearestShop }),
+      };
     }
 
     const pickupSlots = (loc.pickupSlots || []).map((s: any) => ({
@@ -489,6 +571,8 @@ export class LocationsService {
                   r.code !== 'LOCATION_CLOSED_TODAY' &&
                   r.code !== 'LOCATION_TEMPORARILY_UNAVAILABLE',
         );
+        // GeoJSON stores coordinates as [longitude, latitude]
+        const [shopLng, shopLat] = loc.geoPoint?.coordinates ?? [null, null];
         return {
           shop: {
             _id: String(loc._id),
@@ -496,6 +580,10 @@ export class LocationsService {
             fullAddress: loc.fullAddress,
             city: loc.city,
             contactNumber: loc.contactNumber,
+            // Expose shop coordinates so the frontend can use them for
+            // Drop at Shop slot loading (avoids service-area blocking walk-ins).
+            latitude: shopLat ?? null,
+            longitude: shopLng ?? null,
           },
           distanceKm: loc.distanceMeters != null
             ? +(loc.distanceMeters / 1000).toFixed(2)
@@ -875,27 +963,36 @@ export class LocationsService {
 
     // Only enforce pickup/delivery slot matching when the location has slots
     // configured. An empty slots array means the location accepts any slot label.
+    // "Instant" and "Full Day" are global meta-slots that are always valid.
+    const OPEN_SLOTS = new Set(['instant', 'full day', 'full-day']);
+
     const locationPickupSlots: any[] = candidate.pickupSlots || [];
     const locationDeliverySlots: any[] = candidate.deliverySlots || [];
 
     if (payload.pickupSlot && locationPickupSlots.length > 0) {
-      const hasPickupSlot = locationPickupSlots.some(
-        (slot) => slot.label === payload.pickupSlot,
-      );
-      if (!hasPickupSlot) {
-        reasons.push({ code: 'NO_PICKUP_SLOTS_AVAILABLE', message: 'Selected pickup slot is not available at this branch' });
+      const slotKey = payload.pickupSlot.trim().toLowerCase();
+      if (!OPEN_SLOTS.has(slotKey)) {
+        const hasPickupSlot = locationPickupSlots.some(
+          (slot) => slot.label.trim().toLowerCase() === slotKey,
+        );
+        if (!hasPickupSlot) {
+          reasons.push({ code: 'NO_PICKUP_SLOTS_AVAILABLE', message: 'Selected pickup slot is not available at this branch' });
+        }
       }
     }
 
     if (payload.deliverySlot && locationDeliverySlots.length > 0) {
-      const hasDeliverySlot = locationDeliverySlots.some(
-        (slot) => slot.label === payload.deliverySlot,
-      );
-      if (!hasDeliverySlot) {
-        reasons.push({
-          code: 'NO_DELIVERY_SLOTS_AVAILABLE',
-          message: 'Selected delivery slot is not available at this branch',
-        });
+      const slotKey = payload.deliverySlot.trim().toLowerCase();
+      if (!OPEN_SLOTS.has(slotKey)) {
+        const hasDeliverySlot = locationDeliverySlots.some(
+          (slot) => slot.label.trim().toLowerCase() === slotKey,
+        );
+        if (!hasDeliverySlot) {
+          reasons.push({
+            code: 'NO_DELIVERY_SLOTS_AVAILABLE',
+            message: 'Selected delivery slot is not available at this branch',
+          });
+        }
       }
     }
 
@@ -952,11 +1049,21 @@ export class LocationsService {
   private isPointInsideServiceArea(location: any, latitude: number, longitude: number) {
     if (location.serviceAreaType === ServiceAreaType.RADIUS) {
       const [lng, lat] = location.geoPoint?.coordinates || [];
-      if (lat == null || lng == null || !location.serviceRadiusKm) return false;
-      return haversineDistanceKm(latitude, longitude, lat, lng) <= location.serviceRadiusKm;
+      // No shop coordinates → cannot check → accept (soft fail open)
+      if (lat == null || lng == null) return true;
+      // Use radius from location; fall back to 50 km if unset
+      const radius = location.serviceRadiusKm ?? 50;
+      // Prefer the geoNear-computed distance (already available, no extra calc)
+      const distanceKm =
+        location.distanceMeters != null
+          ? location.distanceMeters / 1000
+          : haversineDistanceKm(latitude, longitude, lat, lng);
+      return distanceKm <= radius;
     }
+    // Polygon area
     const ring = location.servicePolygon?.coordinates?.[0];
-    if (!ring || !Array.isArray(ring)) return false;
+    // No polygon ring → cannot check → accept (soft fail open)
+    if (!ring || !Array.isArray(ring)) return true;
     return isPointInsidePolygon(longitude, latitude, ring);
   }
 
@@ -971,24 +1078,57 @@ export class LocationsService {
         ? payload.searchRadiusKm
         : 50) * 1000;
 
-    return this.locationModel
-      .aggregate([
-        {
-          $geoNear: {
-            near: {
-              type: 'Point' as const,
-              coordinates: [payload.longitude, payload.latitude] as [number, number],
+    try {
+      return await this.locationModel
+        .aggregate([
+          {
+            $geoNear: {
+              near: {
+                type: 'Point' as const,
+                coordinates: [payload.longitude, payload.latitude] as [number, number],
+              },
+              distanceField: 'distanceMeters',
+              spherical: true,
+              key: 'geoPoint',
+              maxDistance: maxDistanceMeters,
+              query,
             },
-            distanceField: 'distanceMeters',
-            spherical: true,
-            key: 'geoPoint',
-            maxDistance: maxDistanceMeters,
-            query,
           },
-        },
-        { $limit: 40 },
-      ])
-      .exec();
+          { $limit: 40 },
+        ])
+        .exec();
+    } catch (err: any) {
+      // MongoDB error 291: NoQueryExecutionPlans — 2dsphere index missing.
+      // onModuleInit attempts syncIndexes() at startup; this catch handles the
+      // race where the first request fires before the index is created.
+      const isIndexMissing =
+        err?.code === 291 ||
+        (typeof err?.message === 'string' &&
+          err.message.includes('unable to find index for $geoNear'));
+
+      if (isIndexMissing) {
+        this.logger.error(
+          'Missing 2dsphere index on locations.geoPoint. ' +
+          'Attempting emergency index creation…',
+        );
+        try {
+          // Attempt to create the index inline so subsequent requests succeed.
+          await this.locationModel.collection.createIndex(
+            { geoPoint: '2dsphere' },
+            { background: true },
+          );
+          this.logger.log('2dsphere index created successfully.');
+        } catch (idxErr: any) {
+          this.logger.error('Emergency index creation failed', idxErr?.message);
+        }
+        throw new BadRequestException(
+          'Location service is initialising — please retry in a few seconds.',
+        );
+      }
+
+      // Re-throw anything else unchanged.
+      throw err;
+    }
   }
 
   private reorderCandidates(candidates: any[], preferredLocationId?: string) {

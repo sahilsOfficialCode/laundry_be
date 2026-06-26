@@ -39,4 +39,16 @@ export class UpdateOrderStatusDto {
   @IsNumber()
   @Min(0)
   billAmount?: number;
+
+  /** ETA in minutes — set when status = OUT_FOR_DELIVERY */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  etaMinutes?: number;
+
+  /** Driver distance from customer in km — set when status = OUT_FOR_DELIVERY */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  driverDistanceKm?: number;
 }

@@ -49,6 +49,14 @@ export class StandardTimeSlot {
   @Prop({ required: true, default: true, index: true })
   isActive: boolean;
 
+  /**
+   * Grace-period support: when an admin deactivates a slot with a delay,
+   * the slot remains visible to users until this timestamp (even though
+   * isActive is already false). Null means no grace period is active.
+   */
+  @Prop({ required: false, default: null })
+  effectiveUntil?: Date;
+
   /** Controls display order in the app (lower = first) */
   @Prop({ required: true, default: 0 })
   sortOrder: number;

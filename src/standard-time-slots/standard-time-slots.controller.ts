@@ -30,6 +30,7 @@ export class StandardTimeSlotsController {
    * GET /standard-time-slots/available?date=YYYY-MM-DD
    * Returns pickup slots + delivery slots including the Instant option.
    * Mobile app calls this on the scheduling screen.
+   * Past-time filtering is applied automatically for today's date.
    */
   @Get('available')
   getAvailable(@Query('date') date: string) {
@@ -37,6 +38,17 @@ export class StandardTimeSlotsController {
   }
 
   // ── Admin only ─────────────────────────────────────────────────────────────
+
+  /**
+   * GET /standard-time-slots/stats?date=YYYY-MM-DD
+   * All slots with order counts for the given date.
+   * Used by the admin Time Slots page to show slot utilisation.
+   */
+  @Get('stats')
+  @Roles(UserRole.ADMIN)
+  getStats(@Query('date') date: string) {
+    return this.svc.getStats(date);
+  }
 
   /**
    * POST /standard-time-slots
@@ -80,12 +92,20 @@ export class StandardTimeSlotsController {
 
   /**
    * PATCH /standard-time-slots/:id/toggle
-   * Toggle isActive without sending the full payload.
+   * Toggle isActive.
+   *
+   * Body: { isActive: boolean, graceMinutes?: number }
+   * When deactivating (isActive=false) with graceMinutes > 0, the slot remains
+   * visible to users for that many minutes so in-progress checkouts can complete.
    */
   @Patch(':id/toggle')
   @Roles(UserRole.ADMIN)
-  toggle(@Param('id') id: string, @Body('isActive') isActive: boolean) {
-    return this.svc.setActive(id, isActive);
+  toggle(
+    @Param('id') id: string,
+    @Body('isActive') isActive: boolean,
+    @Body('graceMinutes') graceMinutes?: number,
+  ) {
+    return this.svc.setActive(id, isActive, graceMinutes ?? 0);
   }
 
   /**

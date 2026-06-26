@@ -5,6 +5,7 @@ import {
   StandardTimeSlot,
   StandardTimeSlotSchema,
 } from './schemas/standard-time-slot.schema';
+import { Order, OrderSchema } from '../orders/schemas/order.schema';
 import { StandardTimeSlotsService } from './standard-time-slots.service';
 import { StandardTimeSlotsController } from './standard-time-slots.controller';
 
@@ -13,6 +14,7 @@ import { StandardTimeSlotsController } from './standard-time-slots.controller';
     AuthModule,
     MongooseModule.forFeature([
       { name: StandardTimeSlot.name, schema: StandardTimeSlotSchema },
+      { name: Order.name, schema: OrderSchema },
     ]),
   ],
   controllers: [StandardTimeSlotsController],

@@ -46,6 +46,12 @@ export class OrdersController {
     return this.ordersService.findMyOrders(user.sub);
   }
 
+  /** GET /orders/my/summary — active count, completed count, cancelled count, totalSaved */
+  @Get('my/summary')
+  async getMyOrdersSummary(@GetUser() user: any) {
+    return this.ordersService.getMyOrdersSummary(user.sub);
+  }
+
   /**
    * GET /orders/:id  — user sees own order; admin sees any order.
    */
@@ -78,5 +84,20 @@ export class OrdersController {
     @GetUser() user: any,
   ) {
     return this.ordersService.confirmDelivery(orderId, otp, user.sub);
+  }
+
+  /**
+   * POST /orders/:id/rate
+   * User rates a completed order.
+   */
+  @Post(':id/rate')
+  @HttpCode(HttpStatus.OK)
+  async rateOrder(
+    @Param('id') orderId: string,
+    @Body('rating') rating: number,
+    @Body('comment') comment: string | undefined,
+    @GetUser() user: any,
+  ) {
+    return this.ordersService.rateOrder(orderId, user.sub, rating, comment);
   }
 }

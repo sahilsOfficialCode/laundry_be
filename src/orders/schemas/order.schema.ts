@@ -105,6 +105,33 @@ export class Order {
   /** Bill amount after itemization — may differ from original totalAmount */
   @Prop({ required: false })
   billAmount?: number;
+
+  // ── Out-for-delivery live tracking ─────────────────────────────────────────
+
+  /** ETA in minutes — set when status → OUT_FOR_DELIVERY */
+  @Prop({ required: false })
+  etaMinutes?: number;
+
+  /** Driver distance from customer in km — updated when status → OUT_FOR_DELIVERY */
+  @Prop({ required: false })
+  driverDistanceKm?: number;
+
+  // ── Post-delivery rating ───────────────────────────────────────────────────
+
+  /** Star rating (1–5) — set by user after COMPLETED */
+  @Prop({ required: false, min: 1, max: 5 })
+  rating?: number;
+
+  /** Optional review comment */
+  @Prop({ required: false })
+  ratingComment?: string;
+
+  // ── Status history — one entry pushed every time status changes ────────────
+  @Prop({
+    type: [{ status: String, timestamp: Date }],
+    default: [],
+  })
+  statusHistory: { status: string; timestamp: Date }[];
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);

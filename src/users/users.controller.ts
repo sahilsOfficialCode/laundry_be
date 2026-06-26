@@ -48,6 +48,16 @@ export class UsersController {
     return this.usersService.updateProfileName(user.sub, name);
   }
 
+  @Patch(':id/role')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  async changeRole(
+    @Param('id') id: string,
+    @Body('role') role: UserRole,
+  ) {
+    return this.usersService.changeRole(id, role);
+  }
+
   @Post(':id/block')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
