@@ -17,8 +17,8 @@ export class LaundryService {
   @Prop({ required: true })
   description!: string;
 
-  @Prop({ required: false })
-  category?: string;
+  @Prop({ type: [String], default: [] })
+  categories?: string[];
 
   @Prop({ required: false })
   duration?: string;

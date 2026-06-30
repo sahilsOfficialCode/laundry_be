@@ -1,17 +1,4 @@
-import { IsString, IsNumber, IsOptional, IsBoolean, Min } from 'class-validator';
-
-// export class CreateServiceDto {
-//   @IsString()
-//   name: string;
-
-//   @IsNumber()
-//   @Min(0)
-//   price: number;
-
-//   @IsString()
-//   description: string;
-
-// }
+import { IsString, IsNumber, IsOptional, IsBoolean, IsArray, IsIn, Min } from 'class-validator';
 
 export class CreateServiceDto {
   @IsString()
@@ -25,8 +12,9 @@ export class CreateServiceDto {
   description?: string;
 
   @IsOptional()
-  @IsString()
-  category?: string;
+  @IsArray()
+  @IsIn(['instant', 'scheduled'], { each: true })
+  categories?: string[];
 
   @IsOptional()
   @IsString()
