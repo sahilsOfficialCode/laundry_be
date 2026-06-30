@@ -49,6 +49,7 @@ export class SupportGateway
         client.join('admins');
       }
     } catch (error) {
+      console.log("<><>working error")
       client.emit('support:error', {
         message: 'Authentication failed',
       });

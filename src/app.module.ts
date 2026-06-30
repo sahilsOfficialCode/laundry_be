@@ -14,6 +14,7 @@ import { SupportModule } from './support/support.module';
 import { LocationsModule } from './locations/locations.module';
 import { ServiceZonesModule } from './service-zones/service-zones.module';
 import { StandardTimeSlotsModule } from './standard-time-slots/standard-time-slots.module';
+import { UploadModule } from './upload/upload.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { StandardTimeSlotsModule } from './standard-time-slots/standard-time-slo
     LocationsModule,
     ServiceZonesModule,
     StandardTimeSlotsModule,
+    UploadModule,
   ],
   providers: [
     {
