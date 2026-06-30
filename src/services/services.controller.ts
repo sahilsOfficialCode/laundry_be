@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Body, Query } from '@nestjs/common';
+import { Public } from '../auth/decorators/public.decorator';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { ServicesService } from './services.service';
 import { CreateServiceDto } from './dto/create-service.dto';
@@ -13,8 +14,10 @@ export class ServicesController {
     return this.servicesService.create(user.sub, createServiceDto);
   }
 
+  /** Public — services are a catalogue, not user-specific data. */
+  @Public()
   @Get()
-  async findAll(@GetUser() user: any, @Query() filterDto: GetServicesFilterDto) {
-    return this.servicesService.findAll(user.sub, filterDto);
+  async findAll(@Query() filterDto: GetServicesFilterDto) {
+    return this.servicesService.findAll(filterDto);
   }
 }

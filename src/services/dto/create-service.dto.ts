@@ -33,6 +33,10 @@ export class CreateServiceDto {
   duration?: string;
 
   @IsOptional()
+  @IsString()
+  imageUrl?: string;
+
+  @IsOptional()
   @IsBoolean()
   isAvailable?: boolean;
 }

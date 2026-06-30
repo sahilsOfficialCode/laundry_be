@@ -17,7 +17,7 @@ export class ServicesService {
     return createdService.save();
   }
 
-  async findAll(userId: string, filterDto: GetServicesFilterDto = {}): Promise<any> {
+  async findAll(filterDto: GetServicesFilterDto = {}): Promise<any> {
     const { search, page, limit } = filterDto;
 
     const query: any = { };

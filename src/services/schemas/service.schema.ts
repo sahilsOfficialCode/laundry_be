@@ -23,6 +23,9 @@ export class LaundryService {
   @Prop({ required: false })
   duration?: string;
 
+  @Prop({ required: false })
+  imageUrl?: string;
+
   @Prop({ required: true, default: true })
   isAvailable!: boolean;
 }
