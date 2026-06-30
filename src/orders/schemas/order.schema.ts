@@ -34,13 +34,15 @@ export class Order {
     city?: string;
   };
 
-  @Prop({ type: [{ serviceId: String, serviceName: String, icon: String, quantity: Number, price: Number }] })
-  items: { 
-    serviceId: string; 
-    serviceName: string; 
+  @Prop({ type: [{ serviceId: String, serviceName: String, icon: String, quantity: Number, price: Number, category: String }] })
+  items: {
+    serviceId: string;
+    serviceName: string;
     icon?: string;
-    quantity: number; 
-    price: number; 
+    quantity: number;
+    price: number;
+    /** 'instant' | 'scheduled' — which type the user ordered */
+    category?: string;
   }[];
 
   @Prop({ required: true })

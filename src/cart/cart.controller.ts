@@ -5,6 +5,7 @@ import {
   Get,
   Delete,
   Param,
+  Query,
 } from '@nestjs/common';
 import { CartService } from './cart.service';
 import { AddToCartDto } from './dto/add-to-cart.dto';
@@ -25,7 +26,11 @@ export class CartController {
   }
 
   @Delete('items/:serviceId')
-  async removeItem(@GetUser() user: any, @Param('serviceId') serviceId: string) {
-    return this.cartService.removeItem(user.sub, serviceId);
+  async removeItem(
+    @GetUser() user: any,
+    @Param('serviceId') serviceId: string,
+    @Query('category') category?: string,
+  ) {
+    return this.cartService.removeItem(user.sub, serviceId, category);
   }
 }

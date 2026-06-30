@@ -22,7 +22,7 @@ export class CartService {
   ) {}
 
   async addItem(userId: string, dto: AddToCartDto) {
-    const { serviceId, quantity } = dto;
+    const { serviceId, quantity, category = 'instant' } = dto;
 
     const service = await this.serviceModel.findById(serviceId);
 
@@ -40,8 +40,11 @@ export class CartService {
       cart = new this.cartModel({ userId, items: [], totalAmount: 0 });
     }
 
+    // Composite key: same service added from Instant tab vs Scheduled tab = separate line items
     const existingItem = cart.items.find(
-      (item) => item.serviceId.toString() === serviceId,
+      (item) =>
+        item.serviceId.toString() === serviceId &&
+        (item.category ?? 'instant') === category,
     );
 
     if (existingItem) {
@@ -49,12 +52,13 @@ export class CartService {
       existingItem.subtotal =
         existingItem.quantity * existingItem.unitPriceSnapshot;
     } else {
-      cart.items.push({
+      (cart.items as any[]).push({
         serviceId: service._id,
         serviceNameSnapshot: service.name,
         unitPriceSnapshot: service.price,
         quantity,
         subtotal: service.price * quantity,
+        category,
       });
     }
 
@@ -63,7 +67,6 @@ export class CartService {
     return cart.save();
   }
 
-
   async getCart(userId: string) {
     const cart = await this.cartModel.findOne({ userId });
 
@@ -71,19 +74,40 @@ export class CartService {
       return { items: [], totalAmount: 0 };
     }
 
+    // Auto-clean items whose service has been deleted from the catalogue.
+    // This prevents the user seeing "phantom" items they can never check out.
+    const validItems: typeof cart.items = [];
+    for (const item of cart.items) {
+      const exists = await this.serviceModel.exists({ _id: item.serviceId });
+      if (exists) {
+        validItems.push(item);
+      }
+    }
+
+    if (validItems.length !== cart.items.length) {
+      cart.items = validItems;
+      cart.totalAmount = validItems.reduce((s, i) => s + (i as any).subtotal, 0);
+      await cart.save();
+    }
+
     return cart;
   }
 
-  async removeItem(userId: string, serviceId: string) {
+  /** Remove one specific line item identified by serviceId + category. */
+  async removeItem(userId: string, serviceId: string, category?: string) {
     const cart = await this.cartModel.findOne({ userId });
 
     if (!cart) {
       throw new NotFoundException('Cart not found');
     }
 
-    cart.items = cart.items.filter(
-      (item) => item.serviceId.toString() !== serviceId,
-    );
+    cart.items = cart.items.filter((item) => {
+      if (item.serviceId.toString() !== serviceId) return true;
+      // If category provided, only remove the matching category line
+      if (category) return (item.category ?? 'instant') !== category;
+      // No category → remove all lines for this service (legacy behaviour)
+      return false;
+    });
 
     cart.totalAmount = cart.items.reduce((sum, item) => sum + item.subtotal, 0);
 

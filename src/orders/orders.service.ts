@@ -156,35 +156,50 @@ export class OrdersService {
       throw new BadRequestException('Cart is empty');
     }
 
-    // Validate + transform items
-    const orderItems = await Promise.all(
+    // Validate + transform items. Skip any whose service was deleted from the
+    // catalogue — auto-clean them from the cart so the user doesn't hit this
+    // repeatedly. Unavailable or zero-qty items are also silently dropped.
+    const staleServiceIds: string[] = [];
+    const resolvedItems = await Promise.all(
       cart.items.map(async (item) => {
-        const service = await this.serviceModel.findById(item.serviceId);
+        if (item.quantity <= 0) return null;
+
+        const service = await this.serviceModel.findById(item.serviceId).lean();
 
         if (!service) {
-          throw new NotFoundException(
-            'Service not found: ' + item.serviceId.toString(),
-          );
+          staleServiceIds.push(item.serviceId.toString());
+          return null; // will be filtered below
         }
 
-        if (!service.isAvailable) {
-          throw new BadRequestException(
-            'Service not available: ' + service.name,
-          );
-        }
-
-        if (item.quantity <= 0) {
-          throw new BadRequestException('Invalid quantity');
-        }
+        if (!service.isAvailable) return null;
 
         return {
           serviceId: item.serviceId,
           serviceName: service.name,
           quantity: item.quantity,
           price: service.price,
+          category: (item as any).category ?? 'instant',
         };
       }),
     );
+
+    // Auto-remove stale items so the cart is clean going forward
+    if (staleServiceIds.length > 0) {
+      cart.items = cart.items.filter(
+        (i) => !staleServiceIds.includes(i.serviceId.toString()),
+      );
+      cart.totalAmount = cart.items.reduce((s, i) => s + (i as any).subtotal, 0);
+      await cart.save();
+    }
+
+    const orderItems = resolvedItems.filter(Boolean) as NonNullable<typeof resolvedItems[number]>[];
+
+    if (orderItems.length === 0) {
+      throw new BadRequestException(
+        'None of the items in your cart are currently available. ' +
+        'Please add services and try again.',
+      );
+    }
 
     // Calculate total
     const totalAmount = orderItems.reduce(

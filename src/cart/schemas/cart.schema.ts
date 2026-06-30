@@ -19,6 +19,10 @@ class CartItem {
 
   @Prop({ required: true })
   subtotal: number;
+
+  /** 'instant' | 'scheduled' — which tab the user added this service from */
+  @Prop({ required: false, default: 'instant' })
+  category?: string;
 }
 
 @Schema({ timestamps: true })
