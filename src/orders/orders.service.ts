@@ -2,6 +2,7 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, isValidObjectId } from 'mongoose';
@@ -20,12 +21,15 @@ import { CheckoutContextDto } from './dto/checkout-context.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { LocationsService } from '../locations/locations.service';
 import { ServiceZonesService } from '../service-zones/service-zones.service';
+import { CloudflareImagesService } from './services/cloudflare-images.service';
 
 /** Labels that are never subject to slot-level capacity checks. */
 const OPEN_SLOT_LABELS = new Set(['instant', 'full day', 'full-day']);
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     @InjectModel(Order.name)
     private orderModel: Model<OrderDocument>,
@@ -41,6 +45,7 @@ export class OrdersService {
 
     private readonly locationsService: LocationsService,
     private readonly serviceZonesService: ServiceZonesService,
+    private readonly cloudflareImagesService: CloudflareImagesService,
   ) {}
 
   // Create Order (legacy/direct)
@@ -385,5 +390,108 @@ export class OrdersService {
       [OrderStatus.CANCELLED]:        [],
     };
     return transitions[current]?.includes(next) ?? false;
+  }
+
+  /**
+   * Upload washed clothes image for an order
+   * Rejected only for terminal orders; each order may contain at most 5 images.
+   */
+  async uploadWashedImage(
+    orderId: string,
+    file: Express.Multer.File,
+    uploadedBy: string,
+  ) {
+    const order = await this.orderModel.findById(orderId);
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    if (
+      order.status === OrderStatus.COMPLETED ||
+      order.status === OrderStatus.CANCELLED
+    ) {
+      throw new BadRequestException(
+        `Cannot upload images for an order with status ${order.status}`,
+      );
+    }
+
+    if ((order.washedClothesImages?.length ?? 0) >= 5) {
+      throw new BadRequestException(
+        'An order can have a maximum of 5 washed clothes images',
+      );
+    }
+
+    const cloudflareImage = await this.cloudflareImagesService.uploadImage(
+      file.buffer,
+    );
+    const imageMetadata = {
+      ...cloudflareImage,
+      uploadedBy,
+      uploadedAt: new Date(),
+    };
+
+    try {
+      const updatedOrder = await this.orderModel.findOneAndUpdate(
+        {
+          _id: orderId,
+          status: {
+            $nin: [OrderStatus.COMPLETED, OrderStatus.CANCELLED],
+          },
+          $expr: {
+            $lt: [{ $size: { $ifNull: ['$washedClothesImages', []] } }, 5],
+          },
+        },
+        { $push: { washedClothesImages: imageMetadata } },
+        { new: true },
+      );
+
+      if (!updatedOrder) {
+        const currentOrder = await this.orderModel.findById(orderId);
+        if (!currentOrder) {
+          throw new NotFoundException('Order not found');
+        }
+        if (
+          currentOrder.status === OrderStatus.COMPLETED ||
+          currentOrder.status === OrderStatus.CANCELLED
+        ) {
+          throw new BadRequestException(
+            `Cannot upload images for an order with status ${currentOrder.status}`,
+          );
+        }
+        throw new BadRequestException(
+          'An order can have a maximum of 5 washed clothes images',
+        );
+      }
+
+      return imageMetadata;
+    } catch (error) {
+      try {
+        await this.cloudflareImagesService.deleteImage(
+          cloudflareImage.cloudflareId,
+        );
+      } catch (rollbackError) {
+        this.logger.error(
+          `Failed to roll back Cloudflare image ${cloudflareImage.cloudflareId}`,
+          rollbackError,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get all washed clothes images for an order
+   */
+  async getWashedImages(orderId: string) {
+    const order = await this.orderModel
+      .findById(orderId)
+      .select('washedClothesImages');
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    return {
+      washedClothesImages: order.washedClothesImages || [],
+    };
   }
 }

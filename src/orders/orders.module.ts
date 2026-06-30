@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
+import { CloudflareImagesService } from './services/cloudflare-images.service';
 
 import { Order, OrderSchema } from './schemas/order.schema';
 import { Cart, CartSchema } from '../cart/schemas/cart.schema';
@@ -32,7 +33,7 @@ import { ServiceZonesModule } from '../service-zones/service-zones.module';
     ServiceZonesModule,
   ],
   controllers: [OrdersController],
-  providers: [OrdersService],
+  providers: [OrdersService, CloudflareImagesService],
   exports: [OrdersService],
 })
 export class OrdersModule {}

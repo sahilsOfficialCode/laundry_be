@@ -132,6 +132,27 @@ export class Order {
     default: [],
   })
   statusHistory: { status: string; timestamp: Date }[];
+
+  // ── Washed clothes images ─────────────────────────────────────────────────
+  @Prop({
+    type: [
+      {
+        cloudflareId: { type: String, required: true },
+        url: { type: String, required: true },
+        thumbnailUrl: { type: String, required: false },
+        uploadedBy: { type: String, required: true },
+        uploadedAt: { type: Date, required: true },
+      },
+    ],
+    default: [],
+  })
+  washedClothesImages: {
+    cloudflareId: string;
+    url: string;
+    thumbnailUrl?: string;
+    uploadedBy: string;
+    uploadedAt: Date;
+  }[];
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);

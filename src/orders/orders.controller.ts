@@ -9,7 +9,13 @@ import {
   Query,
   HttpCode,
   HttpStatus,
+  UseInterceptors,
+  UploadedFile,
+  ParseFilePipe,
+  FileTypeValidator,
+  MaxFileSizeValidator,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 import { OrdersService } from './orders.service';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
@@ -99,5 +105,40 @@ export class OrdersController {
     @GetUser() user: any,
   ) {
     return this.ordersService.rateOrder(orderId, user.sub, rating, comment);
+  }
+
+  /**
+   * POST /orders/:orderId/washed-image
+   * Admin uploads washed clothes image for an order.
+   */
+  @Post(':orderId/washed-image')
+  @Roles(UserRole.ADMIN)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadWashedImage(
+    @Param('orderId') orderId: string,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new FileTypeValidator({
+            fileType: /^(image\/jpeg|image\/png|image\/webp)$/,
+          }),
+          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+    @GetUser() user: any,
+  ) {
+    return this.ordersService.uploadWashedImage(orderId, file, user.sub);
+  }
+
+  /**
+   * GET /orders/:orderId/washed-images
+   * Admin retrieves all washed clothes images for an order.
+   */
+  @Get(':orderId/washed-images')
+  @Roles(UserRole.ADMIN)
+  async getWashedImages(@Param('orderId') orderId: string) {
+    return this.ordersService.getWashedImages(orderId);
   }
 }
