@@ -4,7 +4,6 @@ import {
   IsString,
   IsNumber,
   Min,
-  Matches,
 } from 'class-validator';
 import { OrderStatus } from '../schemas/order.schema';
 
@@ -34,11 +33,22 @@ export class UpdateOrderStatusDto {
   @Min(0)
   itemCount?: number;
 
-  /** Bill amount after itemization */
+  /**
+   * Bill amount after itemization — MANDATORY when advancing to ITEMIZED.
+   * This is the confirmed price the user will be charged.
+   */
   @IsOptional()
   @IsNumber()
   @Min(0)
   billAmount?: number;
+
+  /**
+   * Confirmed pickup time label — MANDATORY when advancing to ITEMIZED.
+   * e.g. "10:00 AM – 12:00 PM"
+   */
+  @IsOptional()
+  @IsString()
+  pickupTime?: string;
 
   /** ETA in minutes — set when status = OUT_FOR_DELIVERY */
   @IsOptional()
@@ -51,4 +61,12 @@ export class UpdateOrderStatusDto {
   @IsNumber()
   @Min(0)
   driverDistanceKm?: number;
+
+  /**
+   * 4-digit OTP — MANDATORY when admin confirms delivery (OUT_FOR_DELIVERY → COMPLETED).
+   * Must match the OTP that was generated after the user's payment.
+   */
+  @IsOptional()
+  @IsString()
+  otp?: string;
 }

@@ -199,21 +199,39 @@ export class UsersService {
     return user;
   }
 
-  async updateProfileName(userId: string, name?: string): Promise<any> {
-    const trimmedName = name?.trim();
-    if (!trimmedName) {
-      throw new BadRequestException('Name is required');
+  async saveFcmToken(userId: string, token: string): Promise<void> {
+    if (!token?.trim()) throw new BadRequestException('FCM token is required');
+    await this.userModel.findByIdAndUpdate(userId, { fcmToken: token.trim() });
+  }
+
+  async updateProfile(
+    userId: string,
+    fields: { name?: string; photoUrl?: string },
+  ): Promise<any> {
+    const trimmedName  = fields.name?.trim();
+    const trimmedPhoto = fields.photoUrl?.trim();
+
+    if (!trimmedName && !trimmedPhoto) {
+      throw new BadRequestException(
+        'Provide at least a name or a photo URL to update.',
+      );
     }
 
-    return this.userModel
-      .findByIdAndUpdate(
-        userId,
-        { name: trimmedName },
-        {
-          new: true,
-        },
-      )
+    const update: Record<string, string> = {};
+    if (trimmedName)  update.name     = trimmedName;
+    if (trimmedPhoto) update.photoUrl = trimmedPhoto;
+
+    const user = await this.userModel
+      .findByIdAndUpdate(userId, { $set: update }, { new: true })
       .select('-password');
+
+    if (!user) throw new NotFoundException('User not found');
+    return user;
+  }
+
+  /** @deprecated kept for backward compatibility — use updateProfile */
+  async updateProfileName(userId: string, name?: string): Promise<any> {
+    return this.updateProfile(userId, { name });
   }
 
   async getAddresses(
@@ -283,39 +301,32 @@ export class UsersService {
     }
 
     const addresses = user.addresses ?? [];
-    const index = addresses.findIndex((item) => item.id === addressId);
+
+    // Support matching by either the custom UUID `id` field or Mongoose's `_id`
+    const index = addresses.findIndex(
+      (item) => item.id === addressId || (item as any)._id?.toString() === addressId,
+    );
     if (index === -1) {
       throw new BadRequestException('Address not found');
     }
 
     const existing = addresses[index];
-
     const shouldBeDefault = dto.isDefault === true;
+
+    // Full replacement (PUT semantics): use DTO values for all content fields.
+    // Fields not sent by the client default to '' via buildAddress.
+    // Only `isDefault` falls back to the existing value when not explicitly changing it.
     const updated = this.buildAddress(
       {
-        houseNo: dto.houseNo ?? existing.houseNo,
-        buildingName: dto.buildingName ?? existing.buildingName,
-        street: dto.street ?? existing.street,
-        area: dto.area ?? existing.area,
-        landmark: dto.landmark ?? existing.landmark,
-        city: dto.city ?? existing.city,
-        state: dto.state ?? existing.state,
-        pincode: dto.pincode ?? existing.pincode,
-        type: dto.type ?? existing.type,
-        instructions: dto.instructions ?? existing.instructions,
+        ...dto,
         isDefault: shouldBeDefault ? true : existing.isDefault,
-        lat: dto.lat ?? existing.lat,
-        lng: dto.lng ?? existing.lng,
       },
       addressId,
       shouldBeDefault ? true : existing.isDefault,
     );
 
-    user.addresses = addresses.map((item) => {
-      if (item.id === addressId) {
-        return updated;
-      }
-
+    user.addresses = addresses.map((item, i) => {
+      if (i === index) return updated;
       return shouldBeDefault ? { ...item, isDefault: false } : item;
     });
 

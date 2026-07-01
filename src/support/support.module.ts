@@ -23,6 +23,6 @@ import { SupportGateway } from './support.gateway';
   ],
   controllers: [SupportController],
   providers: [SupportService, SupportEventsService, SupportGateway],
-  exports: [SupportService],
+  exports: [SupportService, SupportEventsService],
 })
 export class SupportModule {}

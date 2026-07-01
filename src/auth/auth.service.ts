@@ -239,8 +239,9 @@ export class AuthService {
         id: userId,
         email: user.email ?? '',
         mobileNumber: user.mobileNumber ?? '',
-        name: user.name,
-        role: user.role,
+        name: user.name ?? '',
+        role: user.role ?? 'user',
+        photoUrl: user.photoUrl ?? null,
       },
     };
   }

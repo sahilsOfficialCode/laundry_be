@@ -73,4 +73,26 @@ export class SupportController {
     this.supportEvents.emitMessagesRead(conversation);
     return conversation;
   }
+
+  @Patch('conversations/:id/close')
+  @Roles(UserRole.ADMIN)
+  async closeConversation(
+    @Param('id') conversationId: string,
+    @GetUser() user: any,
+  ) {
+    const conversation = await this.supportService.closeConversation(conversationId, user);
+    this.supportEvents.emitConversationUpdated(conversation);
+    return conversation;
+  }
+
+  @Patch('conversations/:id/reopen')
+  @Roles(UserRole.ADMIN)
+  async reopenConversation(
+    @Param('id') conversationId: string,
+    @GetUser() user: any,
+  ) {
+    const conversation = await this.supportService.reopenConversation(conversationId, user);
+    this.supportEvents.emitConversationUpdated(conversation);
+    return conversation;
+  }
 }

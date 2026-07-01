@@ -57,6 +57,18 @@ email?: string;
   @Prop({ default: true })
   isActive: boolean;
 
+  /** FCM device token for push notifications. Updated whenever the app registers. */
+  @Prop({ required: false, default: null })
+  fcmToken?: string;
+
+  /** Profile photo URL (Cloudflare R2). Set when user uploads a photo. */
+  @Prop({ required: false, default: null })
+  photoUrl?: string;
+
+  /** Wallet balance in INR. Credits/debits managed by WalletService. */
+  @Prop({ required: false, default: 0, min: 0 })
+  walletBalance: number;
+
   @Prop({
     type: [
       {

@@ -35,6 +35,30 @@ export class SupportEventsService {
     this.server.to(userRoom).to('admins').emit('support:messages_read', conversation);
   }
 
+  emitConversationUpdated(conversation: { userId: string }) {
+    if (!this.server) {
+      return;
+    }
+
+    const userRoom = this.userRoom(conversation.userId);
+    this.server
+      .to(userRoom)
+      .to('admins')
+      .emit('support:conversation_updated', conversation);
+  }
+
+  /** Notify all connected admins when a new order is placed. */
+  emitNewOrder(order: { _id: string; orderNumber: string; userId: string }) {
+    if (!this.server) return;
+    this.server.to('admins').emit('order:new', order);
+  }
+
+  /** Notify all connected admins when an order status changes. */
+  emitOrderUpdated(order: { _id: string; orderNumber: string; status: string; userId: string }) {
+    if (!this.server) return;
+    this.server.to('admins').emit('order:updated', order);
+  }
+
   private userRoom(userId: string) {
     if (!userId) {
       this.logger.warn('Attempted to emit support event without userId');

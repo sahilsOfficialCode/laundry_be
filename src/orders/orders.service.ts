@@ -20,6 +20,8 @@ import { CheckoutContextDto } from './dto/checkout-context.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { LocationsService } from '../locations/locations.service';
 import { ServiceZonesService } from '../service-zones/service-zones.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { SupportEventsService } from '../support/support-events.service';
 
 /** Labels that are never subject to slot-level capacity checks. */
 const OPEN_SLOT_LABELS = new Set(['instant', 'full day', 'full-day']);
@@ -41,6 +43,8 @@ export class OrdersService {
 
     private readonly locationsService: LocationsService,
     private readonly serviceZonesService: ServiceZonesService,
+    private readonly notificationsService: NotificationsService,
+    private readonly socketEvents: SupportEventsService,
   ) {}
 
   // Create Order (legacy/direct)
@@ -241,8 +245,24 @@ export class OrdersService {
       statusHistory: [{ status: OrderStatus.ORDER_PLACED, timestamp: new Date() }],
     });
 
-    return order.save();
-  
+    const savedOrder = await order.save();
+
+    const savedOrderNumber = savedOrder.orderNumber ?? '';
+
+    // Notify admins over WebSocket that a new order arrived.
+    this.socketEvents.emitNewOrder({
+      _id: String(savedOrder._id),
+      orderNumber: savedOrderNumber,
+      userId,
+    });
+
+    // Fire ORDER_PLACED push notification (non-blocking)
+    this.notificationsService
+      .notifyOrderStatus(userId, savedOrderNumber, OrderStatus.ORDER_PLACED)
+      .catch(() => { /* swallow — notification errors must not fail checkout */ });
+
+    return savedOrder;
+
   }
 
   async clearCart(userId: string) {
@@ -254,17 +274,24 @@ export class OrdersService {
     return this.orderModel.find({ userId }).sort({ createdAt: -1 });
   }
 
-  // ADMIN: Get all orders (paginated)
-  async findAll(page: number = 1, limit: number = 10, status?: OrderStatus) {
-    const skip = (page - 1) * limit;
+  // ADMIN: Get all orders (paginated + sorted + filtered)
+  async findAll(
+    page: number = 1,
+    limit: number = 10,
+    status?: OrderStatus,
+    sortField: string = 'createdAt',
+    sortDir: 'asc' | 'desc' = 'desc',
+  ) {
+    const skip   = (page - 1) * limit;
     const filter = status ? { status } : {};
 
+    // Whitelist sort fields to prevent injection
+    const allowedSorts = new Set(['createdAt', 'updatedAt', 'billAmount', 'totalAmount']);
+    const safeSort = allowedSorts.has(sortField) ? sortField : 'createdAt';
+    const sortObj: Record<string, 1 | -1> = { [safeSort]: sortDir === 'asc' ? 1 : -1 };
+
     const [data, total] = await Promise.all([
-      this.orderModel
-        .find(filter)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
+      this.orderModel.find(filter).sort(sortObj).skip(skip).limit(limit),
       this.orderModel.countDocuments(filter),
     ]);
 
@@ -310,21 +337,61 @@ export class OrdersService {
       if (dto.driverPhone) order.driverPhone = dto.driverPhone.trim();
     }
 
-    // ITEMIZED → set weight / item count / bill
+    // ITEMIZED → validate mandatory fields + set weight / item count / bill / pickupTime
     if (dto.status === OrderStatus.ITEMIZED) {
-      if (dto.weightKg  != null) order.weightKg  = dto.weightKg;
-      if (dto.itemCount != null) order.itemCount  = dto.itemCount;
-      if (dto.billAmount != null) order.billAmount = dto.billAmount;
+      if (dto.billAmount == null || dto.billAmount <= 0) {
+        throw new BadRequestException('Bill amount is required and must be greater than 0 when itemizing an order.');
+      }
+      if (!dto.pickupTime && !order.pickupTime) {
+        throw new BadRequestException('Pickup time is required when itemizing an order.');
+      }
+      if (dto.weightKg   != null) order.weightKg  = dto.weightKg;
+      if (dto.itemCount  != null) order.itemCount  = dto.itemCount;
+      order.billAmount = dto.billAmount;
+      if (dto.pickupTime) order.pickupTime = dto.pickupTime.trim();
     }
 
-    // OUT_FOR_DELIVERY → auto-generate 4-digit OTP + tracking fields
+    // OUT_FOR_DELIVERY → set tracking fields (OTP is already set after payment)
     if (dto.status === OrderStatus.OUT_FOR_DELIVERY) {
-      order.deliveryOtp = String(Math.floor(1000 + Math.random() * 9000));
+      if (!order.deliveryOtp) {
+        throw new BadRequestException('Cannot dispatch order: payment has not been completed yet. The user must pay before the order is dispatched.');
+      }
       if (dto.etaMinutes       != null) order.etaMinutes       = dto.etaMinutes;
       if (dto.driverDistanceKm != null) order.driverDistanceKm = dto.driverDistanceKm;
     }
 
-    return order.save();
+    // COMPLETED → admin must enter the OTP to confirm delivery
+    if (dto.status === OrderStatus.COMPLETED) {
+      if (!order.deliveryOtp) {
+        throw new BadRequestException('No delivery OTP found for this order.');
+      }
+      if (!dto.otp || dto.otp.trim() !== order.deliveryOtp) {
+        throw new BadRequestException('Invalid OTP. Please verify the code with the customer and try again.');
+      }
+    }
+
+    const updatedOrder = await order.save();
+
+    const updatedOrderNumber = updatedOrder.orderNumber ?? '';
+
+    // Notify admins over WebSocket about the status change.
+    this.socketEvents.emitOrderUpdated({
+      _id: String(updatedOrder._id),
+      orderNumber: updatedOrderNumber,
+      status: dto.status,
+      userId: updatedOrder.userId.toString(),
+    });
+
+    // Fire push notification for the new status (non-blocking)
+    this.notificationsService
+      .notifyOrderStatus(
+        updatedOrder.userId.toString(),
+        updatedOrderNumber,
+        dto.status,
+      )
+      .catch(() => { /* swallow — notification errors must not fail status update */ });
+
+    return updatedOrder;
   }
 
   // USER: Get order stats summary

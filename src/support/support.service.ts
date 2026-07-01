@@ -203,6 +203,44 @@ export class SupportService {
     return this.findAuthorizedConversation(conversationId, user);
   }
 
+  async closeConversation(conversationId: string, user: JwtUser) {
+    if (user.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Only admins can close support tickets');
+    }
+    if (!isValidObjectId(conversationId)) {
+      throw new BadRequestException('Invalid conversationId');
+    }
+    const conversation = await this.conversationModel
+      .findByIdAndUpdate(
+        conversationId,
+        { $set: { status: ConversationStatus.RESOLVED } },
+        { new: true },
+      )
+      .lean()
+      .exec();
+    if (!conversation) throw new NotFoundException('Conversation not found');
+    return conversation;
+  }
+
+  async reopenConversation(conversationId: string, user: JwtUser) {
+    if (user.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Only admins can reopen support tickets');
+    }
+    if (!isValidObjectId(conversationId)) {
+      throw new BadRequestException('Invalid conversationId');
+    }
+    const conversation = await this.conversationModel
+      .findByIdAndUpdate(
+        conversationId,
+        { $set: { status: ConversationStatus.OPEN } },
+        { new: true },
+      )
+      .lean()
+      .exec();
+    if (!conversation) throw new NotFoundException('Conversation not found');
+    return conversation;
+  }
+
   private async getOrCreateUserConversation(userId: string) {
     return this.conversationModel
       .findOneAndUpdate(
