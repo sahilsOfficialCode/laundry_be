@@ -201,7 +201,15 @@ export class UsersService {
 
   async saveFcmToken(userId: string, token: string): Promise<void> {
     if (!token?.trim()) throw new BadRequestException('FCM token is required');
-    await this.userModel.findByIdAndUpdate(userId, { fcmToken: token.trim() });
+    
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+    
+    // Add token to fcmTokens array if not already present (multi-device support)
+    if (!user.fcmTokens.includes(token.trim())) {
+      user.fcmTokens.push(token.trim());
+      await user.save();
+    }
   }
 
   async updateProfile(

@@ -49,15 +49,6 @@ export class UsersController {
     return this.usersService.updateProfile(user.sub, { name, photoUrl });
   }
 
-  /** Register or update the FCM device token for the current user. */
-  @Post('fcm-token')
-  async registerFcmToken(
-    @GetUser() user: any,
-    @Body('token') token: string,
-  ) {
-    return this.usersService.saveFcmToken(user.sub, token);
-  }
-
   @Patch(':id/role')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)

@@ -6,11 +6,16 @@ import { OrdersModule } from '../orders/orders.module';
 import { AuthModule } from '../auth/auth.module';
 import { Order, OrderSchema } from '../orders/schemas/order.schema';
 
+import { NotificationsModule } from '../notifications/notifications.module';
+
 @Module({
   imports: [
-    MongooseModule.forFeature([{ name: Order.name, schema: OrderSchema }]),
+    MongooseModule.forFeature([
+      { name: Order.name, schema: OrderSchema },
+    ]),
     OrdersModule,
     AuthModule,
+    NotificationsModule,
   ],
   providers: [PaymentsService],
   controllers: [PaymentsController],

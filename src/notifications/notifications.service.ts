@@ -112,6 +112,9 @@ export class NotificationsService {
   /**
    * Clean up invalid FCM tokens from user's token array.
    * Called when sendMulticast returns failures for specific tokens.
+   * 
+   * Only removes tokens for permanent Firebase failures (unregistered, invalid).
+   * Retains tokens for transient failures (rate limits, internal errors, etc.).
    */
   private async cleanupInvalidTokens(
     userId: string,
@@ -120,25 +123,54 @@ export class NotificationsService {
   ): Promise<void> {
     try {
       const invalidTokens: string[] = [];
+      const retainedTokens: { token: string; errorCode: string }[] = [];
+
+      // Firebase permanent token failure codes (from firebase-admin v14.1.0)
+      const PERMANENT_FAILURE_CODES = [
+        'messaging/registration-token-not-registered',
+        'messaging/invalid-registration-token',
+      ];
 
       responses.forEach((response, index) => {
         if (!response.success) {
           const token = tokens[index];
-          invalidTokens.push(token);
-          this.logger.debug(`Invalid token detected: ${token.slice(0, 12)}...`);
+          const errorCode = response.error?.code || response.error?.message || 'UNKNOWN';
+
+          if (PERMANENT_FAILURE_CODES.includes(errorCode)) {
+            // Permanent failure - remove token
+            invalidTokens.push(token);
+            this.logger.warn(
+              `[FCM Cleanup] Token removed for user ${userId} - Code: ${errorCode}, Token: ${token.slice(0, 12)}...`
+            );
+          } else {
+            // Transient failure - retain token
+            retainedTokens.push({ token: token.slice(0, 12) + '...', errorCode });
+            this.logger.debug(
+              `[FCM Cleanup] Token retained for user ${userId} - Code: ${errorCode}, Token: ${token.slice(0, 12)}...`
+            );
+          }
         }
       });
 
-      if (invalidTokens.length === 0) return;
+      if (invalidTokens.length === 0) {
+        if (retainedTokens.length > 0) {
+          this.logger.log(
+            `[FCM Cleanup] No permanent failures for user ${userId}. Retained ${retainedTokens.length} tokens with transient errors.`
+          );
+        }
+        return;
+      }
 
       const user = await this.userModel.findById(userId);
       if (!user) return;
 
-      // Remove invalid tokens
+      // Remove only permanently invalid tokens
       user.fcmTokens = user.fcmTokens.filter(token => !invalidTokens.includes(token));
       await user.save();
 
-      this.logger.log(`Cleaned up ${invalidTokens.length} invalid tokens for user ${userId}`);
+      this.logger.log(
+        `[FCM Cleanup] Removed ${invalidTokens.length} permanently invalid tokens for user ${userId}. Retained ${retainedTokens.length} tokens with transient errors.`
+      );
     } catch (err) {
       this.logger.error(`Failed to cleanup invalid tokens: ${(err as Error).message}`);
     }

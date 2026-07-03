@@ -12,12 +12,14 @@ import { Model } from 'mongoose';
 import { Order, OrderDocument, OrderStatus, PaymentStatus } from '../orders/schemas/order.schema';
 import { CheckoutContextDto } from '../orders/dto/checkout-context.dto';
 import { GetUser } from '../auth/decorators/get-user.decorator';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Controller('payments')
 export class PaymentsController {
   constructor(
     private readonly paymentsService: PaymentsService,
     private readonly ordersService: OrdersService,
+    private readonly notificationsService: NotificationsService,
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
   ) {}
 
@@ -118,6 +120,11 @@ export class PaymentsController {
     order.deliveryOtp = String(Math.floor(1000 + Math.random() * 9000));
 
     await order.save();
+
+    // Fire payment success push notification (non-blocking)
+    this.notificationsService
+      .notifyPaymentSuccess(user.sub, order.orderNumber ?? '')
+      .catch(() => { /* swallow — notification errors must not fail payment verification */ });
 
     return { success: true, order };
   }
