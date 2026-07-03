@@ -4,9 +4,8 @@ import { PaymentsService } from './payments.service';
 import { PaymentsController } from './payments.controller';
 import { OrdersModule } from '../orders/orders.module';
 import { AuthModule } from '../auth/auth.module';
-import { Order, OrderSchema } from '../orders/schemas/order.schema';
-
 import { NotificationsModule } from '../notifications/notifications.module';
+import { Order, OrderSchema } from '../orders/schemas/order.schema';
 
 @Module({
   imports: [

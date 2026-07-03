@@ -94,7 +94,7 @@ export class NotificationsService {
         },
       };
 
-      const response = await messaging.sendMulticast(message);
+      const response = await messaging.sendEachForMulticast(message);
 
       this.logger.log(
         `Notification sent to ${response.successCount}/${tokens.length} devices for user ${userId}`,
