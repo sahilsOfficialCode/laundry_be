@@ -13,12 +13,20 @@ export class NotificationsController {
     @Request() req,
     @Body() registerFcmTokenDto: RegisterFcmTokenDto,
   ) {
-    const userId = req.user?.userId;
+    console.log('[NotificationsController] registerFcmToken called');
+    console.log('[NotificationsController] req.user:', req.user ? 'PRESENT' : 'MISSING');
+    console.log('[NotificationsController] req.user.userId:', req.user?.userId);
+    console.log('[NotificationsController] req.user.sub:', req.user?.sub);
+    
+    const userId = req.user?.userId || req.user?.sub;
     if (!userId) {
+      console.log('[NotificationsController] REJECTING: User not authenticated');
       throw new HttpException('User not authenticated', HttpStatus.UNAUTHORIZED);
     }
 
+    console.log('[NotificationsController] Registering FCM token for user:', userId);
     await this.notificationsService.registerToken(userId, registerFcmTokenDto.fcmToken);
+    console.log('[NotificationsController] FCM token registered successfully');
     return { success: true, message: 'FCM token registered successfully' };
   }
 
