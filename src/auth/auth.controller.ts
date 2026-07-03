@@ -15,6 +15,7 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SendMobileOtpDto } from './dto/send-mobile-otp.dto';
 import { VerifyMobileOtpDto } from './dto/verify-mobile-otp.dto';
+import { FirebaseLoginDto } from './dto/firebase-login.dto';
 import { GetUser } from './decorators/get-user.decorator';
 import { Public } from './decorators/public.decorator';
 import { TokenBlacklistService } from './token-blacklist.service';
@@ -120,6 +121,26 @@ export class AuthController {
   @Post('reset-password')
   resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
     return this.authService.resetPassword(resetPasswordDto);
+  }
+
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @Post('firebase-login')
+  async firebaseLogin(
+    @Body() firebaseLoginDto: FirebaseLoginDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.authService.firebaseLogin(firebaseLoginDto);
+    if ('access_token' in result) {
+      response.cookie('access_token', result.access_token, {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'none',
+        maxAge: 24 * 60 * 60 * 1000,
+      });
+    }
+
+    return result;
   }
 
   @HttpCode(HttpStatus.OK)

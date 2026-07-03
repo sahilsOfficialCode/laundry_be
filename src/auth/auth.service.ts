@@ -15,7 +15,9 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SendMobileOtpDto } from './dto/send-mobile-otp.dto';
 import { VerifyMobileOtpDto } from './dto/verify-mobile-otp.dto';
+import { FirebaseLoginDto } from './dto/firebase-login.dto';
 import { SendMobileOtpService } from './services/send-mobile-otp.service';
+import { FirebaseAdminService } from './services/firebase-admin.service';
 
 @Injectable()
 export class AuthService {
@@ -37,6 +39,7 @@ export class AuthService {
     private usersService: UsersService,
     private jwtService: JwtService,
     private sendMobileOtpService: SendMobileOtpService,
+    private firebaseAdminService: FirebaseAdminService,
   ) {}
 
   async validateUser(email: string, pass: string): Promise<any> {
@@ -69,7 +72,7 @@ export class AuthService {
   }
 
   async sendMobileOtp(sendMobileOtpDto: SendMobileOtpDto) {
-    const mobileNumber = this.normalizeMobileNumber(
+    const mobileNumber = this.firebaseAdminService.normalizePhoneNumber(
       sendMobileOtpDto.mobileNumber,
     );
     const existingUser = await this.usersService.findOneByMobile(mobileNumber);
@@ -99,7 +102,7 @@ export class AuthService {
   }
 
   async verifyMobileOtp(verifyMobileOtpDto: VerifyMobileOtpDto) {
-    const mobileNumber = this.normalizeMobileNumber(
+    const mobileNumber = this.firebaseAdminService.normalizePhoneNumber(
       verifyMobileOtpDto.mobileNumber,
     );
     const record = this.mobileOtpStore.get(mobileNumber);
@@ -220,6 +223,48 @@ export class AuthService {
     }
   }
 
+  async firebaseLogin(firebaseLoginDto: FirebaseLoginDto) {
+    const { firebaseIdToken, mobileNumber, name } = firebaseLoginDto;
+
+    // Verify Firebase ID token
+    const decodedToken = await this.firebaseAdminService.verifyIdToken(firebaseIdToken);
+
+    // Extract phone number from Firebase token
+    const firebasePhoneNumber = this.firebaseAdminService.extractPhoneNumber(decodedToken);
+
+    if (!firebasePhoneNumber) {
+      throw new UnauthorizedException('Phone number not found in Firebase token');
+    }
+
+    // Normalize both phone numbers to E.164 format
+    const normalizedRequestNumber = this.firebaseAdminService.normalizePhoneNumber(mobileNumber);
+    const normalizedFirebaseNumber = this.firebaseAdminService.normalizePhoneNumber(firebasePhoneNumber);
+
+    // Verify that Firebase token phone number matches the provided mobile number
+    if (!this.firebaseAdminService.phoneNumbersMatch(normalizedRequestNumber, normalizedFirebaseNumber)) {
+      throw new UnauthorizedException('Phone number in Firebase token does not match provided mobile number');
+    }
+
+    // Find or create user
+    let user = await this.usersService.findOneByMobile(normalizedRequestNumber);
+
+    if (!user) {
+      // New user - create account
+      const userName = name?.trim();
+      if (!userName) {
+        throw new BadRequestException('Name is required for new users');
+      }
+      user = await this.usersService.createMobileUser(normalizedRequestNumber, userName);
+    }
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const sanitizedUser = user.toObject ? user.toObject() : user;
+    return this.buildAuthResponse(sanitizedUser);
+  }
+
   private buildAuthResponse(user: any) {
     const userId = String(user._id ?? user.id ?? '');
     const payload = {
@@ -244,15 +289,6 @@ export class AuthService {
         photoUrl: user.photoUrl ?? null,
       },
     };
-  }
-
-  private normalizeMobileNumber(value: string): string {
-    const normalized = value.trim();
-    if (!/^\+?[0-9]{10,15}$/.test(normalized)) {
-      throw new BadRequestException('Invalid mobile number format');
-    }
-
-    return normalized;
   }
 
   private hashValue(value: string): string {

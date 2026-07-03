@@ -57,9 +57,9 @@ email?: string;
   @Prop({ default: true })
   isActive: boolean;
 
-  /** FCM device token for push notifications. Updated whenever the app registers. */
-  @Prop({ required: false, default: null })
-  fcmToken?: string;
+  /** FCM device tokens for push notifications. Supports multiple devices per user. */
+  @Prop({ required: false, default: [] })
+  fcmTokens: string[];
 
   /** Profile photo URL (Cloudflare R2). Set when user uploads a photo. */
   @Prop({ required: false, default: null })
