@@ -4,10 +4,12 @@ import { User, UserSchema } from '../users/schemas/user.schema';
 import { NotificationsService } from './notifications.service';
 import { NotificationsController } from './notifications.controller';
 import { FirebaseAdminService } from './firebase-admin.service';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
     MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
+    AuthModule,
   ],
   controllers: [NotificationsController],
   providers: [NotificationsService, FirebaseAdminService],
