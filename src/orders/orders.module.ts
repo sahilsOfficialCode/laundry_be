@@ -21,6 +21,7 @@ import { ServiceZonesModule } from '../service-zones/service-zones.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { SupportModule } from '../support/support.module';
 import { UploadModule } from '../upload/upload.module';
+import { ClothTypesModule } from '../cloth-types/cloth-types.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { UploadModule } from '../upload/upload.module';
     NotificationsModule,
     SupportModule,
     UploadModule,
+    ClothTypesModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService],
