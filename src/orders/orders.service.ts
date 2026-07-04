@@ -265,12 +265,75 @@ export class OrdersService {
       .notifyOrderStatus(userId, savedOrderNumber, OrderStatus.ORDER_PLACED)
       .catch(() => { /* swallow — notification errors must not fail checkout */ });
 
+    // Admin notification bar: new order arrived (non-blocking)
+    this.notificationsService
+      .notifyAdmin({
+        title: 'New Order 🧺',
+        body: `Order #${savedOrderNumber} placed — ₹${savedOrder.totalAmount ?? 0}.`,
+        type: 'order_created',
+        orderId: savedOrderNumber,
+      })
+      .catch(() => { /* swallow */ });
+
     return savedOrder;
 
   }
 
   async clearCart(userId: string) {
     await this.cartModel.updateOne({ userId }, { items: [], totalAmount: 0 });
+  }
+
+  /**
+   * User-initiated cancellation.
+   * Allowed only before itemization (ORDER_PLACED / PICKUP_ASSIGNED),
+   * mirroring the admin status transition rules.
+   */
+  async cancelByUser(orderId: string, userId: string) {
+    const order = await this.orderModel.findOne({ _id: orderId, userId });
+    if (!order) throw new NotFoundException('Order not found');
+
+    if (order.status === OrderStatus.CANCELLED) {
+      return order; // idempotent
+    }
+    if (
+      order.status !== OrderStatus.ORDER_PLACED &&
+      order.status !== OrderStatus.PICKUP_ASSIGNED
+    ) {
+      throw new BadRequestException(
+        'This order can no longer be cancelled. Please contact support.',
+      );
+    }
+
+    order.status = OrderStatus.CANCELLED;
+    order.statusHistory = [
+      ...(order.statusHistory ?? []),
+      { status: OrderStatus.CANCELLED, timestamp: new Date() },
+    ];
+    const cancelled = await order.save();
+
+    const orderNumber = cancelled.orderNumber ?? '';
+
+    this.socketEvents.emitOrderUpdated({
+      _id: String(cancelled._id),
+      orderNumber,
+      status: OrderStatus.CANCELLED,
+      userId,
+    });
+
+    this.notificationsService
+      .notifyOrderStatus(userId, orderNumber, OrderStatus.CANCELLED)
+      .catch(() => { /* swallow */ });
+
+    this.notificationsService
+      .notifyAdmin({
+        title: 'Order Cancelled ❌',
+        body: `Order #${orderNumber} was cancelled by the customer.`,
+        type: 'order_cancelled',
+        orderId: orderNumber,
+      })
+      .catch(() => { /* swallow */ });
+
+    return cancelled;
   }
 
   // Get all orders for user
@@ -396,6 +459,18 @@ export class OrdersService {
         dto.status,
       )
       .catch(() => { /* swallow — notification errors must not fail status update */ });
+
+    // Admin notification bar for important transitions (non-blocking)
+    if (dto.status === OrderStatus.CANCELLED || dto.status === OrderStatus.COMPLETED) {
+      this.notificationsService
+        .notifyAdmin({
+          title: dto.status === OrderStatus.CANCELLED ? 'Order Cancelled ❌' : 'Order Delivered ✅',
+          body: `Order #${updatedOrderNumber} was ${dto.status === OrderStatus.CANCELLED ? 'cancelled' : 'delivered'}.`,
+          type: dto.status === OrderStatus.CANCELLED ? 'order_cancelled' : 'order_completed',
+          orderId: updatedOrderNumber,
+        })
+        .catch(() => { /* swallow */ });
+    }
 
     return updatedOrder;
   }

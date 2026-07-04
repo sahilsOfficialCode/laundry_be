@@ -1,13 +1,26 @@
-import { IsString, IsNumber, IsOptional, IsBoolean, IsArray, IsIn, IsInt, Min, Max } from 'class-validator';
+import {
+  IsString,
+  IsNumber,
+  IsOptional,
+  IsBoolean,
+  IsArray,
+  IsIn,
+  IsInt,
+  Min,
+  Max,
+} from 'class-validator';
 
-export class CreateServiceDto {
+export class UpdateServiceDto {
+  @IsOptional()
   @IsString()
   name?: string;
 
+  @IsOptional()
   @IsNumber()
   @Min(0)
   price?: number;
 
+  @IsOptional()
   @IsString()
   description?: string;
 

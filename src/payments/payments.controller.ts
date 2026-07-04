@@ -60,8 +60,11 @@ export class PaymentsController {
     if (!order || String(order.userId) !== String(user.sub)) {
       throw new BadRequestException('Order not found');
     }
-    if (order.status !== OrderStatus.PROCESSING) {
-      throw new BadRequestException('Payment can only be initiated when order is in Brewing status. Please wait for admin to confirm the bill.');
+    if (
+      order.status !== OrderStatus.ITEMIZED &&
+      order.status !== OrderStatus.PROCESSING
+    ) {
+      throw new BadRequestException('Payment can be made once your order is itemized and the bill is confirmed.');
     }
     if (order.paymentStatus === PaymentStatus.COMPLETED) {
       throw new BadRequestException('Payment has already been completed for this order.');
@@ -125,6 +128,16 @@ export class PaymentsController {
     this.notificationsService
       .notifyPaymentSuccess(user.sub, order.orderNumber ?? '')
       .catch(() => { /* swallow — notification errors must not fail payment verification */ });
+
+    // Admin notification bar: payment received (non-blocking)
+    this.notificationsService
+      .notifyAdmin({
+        title: 'Payment Received 💳',
+        body: `Payment confirmed for Order #${order.orderNumber ?? ''} — ₹${order.totalAmount ?? 0}.`,
+        type: 'payment_success',
+        orderId: order.orderNumber ?? '',
+      })
+      .catch(() => { /* swallow */ });
 
     return { success: true, order };
   }

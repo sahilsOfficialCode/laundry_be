@@ -157,8 +157,11 @@ export class WalletService {
     if (!order.billAmount) {
       throw new BadRequestException('Bill has not been confirmed by admin yet');
     }
-    if (order.status !== OrderStatus.PROCESSING) {
-      throw new BadRequestException('Payment is only available once your order is being processed');
+    if (
+      order.status !== OrderStatus.ITEMIZED &&
+      order.status !== OrderStatus.PROCESSING
+    ) {
+      throw new BadRequestException('Payment is available once your order is itemized and the bill is confirmed');
     }
 
     const user = await this.userModel.findById(userId).select('walletBalance');

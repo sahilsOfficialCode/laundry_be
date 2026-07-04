@@ -72,6 +72,15 @@ export class OrdersController {
   }
 
   /**
+   * POST /orders/:id/cancel — user cancels their own order.
+   * Only allowed before itemization (ORDER_PLACED / PICKUP_ASSIGNED).
+   */
+  @Post(':id/cancel')
+  async cancelMyOrder(@Param('id') orderId: string, @GetUser() user: any) {
+    return this.ordersService.cancelByUser(orderId, user.sub);
+  }
+
+  /**
    * GET /orders/:id  — user sees own order; admin sees any order.
    */
   @Get(':id')
