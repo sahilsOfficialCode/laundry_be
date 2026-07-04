@@ -96,6 +96,14 @@ export class Order {
   @Prop({ required: false })
   deliveryOtp?: string;
 
+  /** Delivery partner (userId with role delivery_partner) — set when status → OUT_FOR_DELIVERY */
+  @Prop({ required: false, index: true })
+  deliveryPartnerId?: string;
+
+  /** Snapshot of the partner's name for display */
+  @Prop({ required: false })
+  deliveryPartnerName?: string;
+
   /** Weight in kg — set by admin when status → ITEMIZED */
   @Prop({ required: false })
   weightKg?: number;

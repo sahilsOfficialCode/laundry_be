@@ -50,6 +50,16 @@ export class UpdateOrderStatusDto {
   @IsString()
   pickupTime?: string;
 
+  /** Delivery partner userId — set when status = OUT_FOR_DELIVERY */
+  @IsOptional()
+  @IsString()
+  deliveryPartnerId?: string;
+
+  /** Delivery partner display name — set when status = OUT_FOR_DELIVERY */
+  @IsOptional()
+  @IsString()
+  deliveryPartnerName?: string;
+
   /** ETA in minutes — set when status = OUT_FOR_DELIVERY */
   @IsOptional()
   @IsNumber()

@@ -61,6 +61,17 @@ export class OrdersController {
   }
 
   /**
+   * GET /orders/delivery/assigned — delivery partner's orders.
+   * Returns { active, completed }: out-for-delivery orders awaiting OTP
+   * confirmation plus recently completed deliveries.
+   */
+  @Get('delivery/assigned')
+  @Roles(UserRole.DELIVERY_PARTNER)
+  async getAssignedDeliveries(@GetUser() user: any) {
+    return this.ordersService.findAssignedToPartner(user.sub);
+  }
+
+  /**
    * GET /orders/:id  — user sees own order; admin sees any order.
    */
   @Get(':id')
@@ -135,6 +146,22 @@ export class OrdersController {
       type as OrderPhotoType,
       photoId,
     );
+  }
+
+  /**
+   * POST /orders/:id/complete-delivery
+   * Delivery partner enters the OTP received from the customer (generated
+   * after payment) to confirm handover and mark the order COMPLETED.
+   */
+  @Post(':id/complete-delivery')
+  @Roles(UserRole.DELIVERY_PARTNER)
+  @HttpCode(HttpStatus.OK)
+  async completeDelivery(
+    @Param('id') orderId: string,
+    @Body('otp') otp: string,
+    @GetUser() user: any,
+  ) {
+    return this.ordersService.completeDeliveryByPartner(orderId, user.sub, otp);
   }
 
   /**

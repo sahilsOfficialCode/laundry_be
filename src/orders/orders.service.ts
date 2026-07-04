@@ -362,6 +362,8 @@ export class OrdersService {
       }
       if (dto.etaMinutes       != null) order.etaMinutes       = dto.etaMinutes;
       if (dto.driverDistanceKm != null) order.driverDistanceKm = dto.driverDistanceKm;
+      if (dto.deliveryPartnerId)   order.deliveryPartnerId   = dto.deliveryPartnerId.trim();
+      if (dto.deliveryPartnerName) order.deliveryPartnerName = dto.deliveryPartnerName.trim();
     }
 
     // COMPLETED → admin must enter the OTP to confirm delivery
@@ -545,6 +547,70 @@ export class OrdersService {
       { status: OrderStatus.COMPLETED, timestamp: new Date() },
     ];
     return order.save();
+  }
+
+  // ── DELIVERY PARTNER ───────────────────────────────────────────────────────
+
+  /**
+   * Orders assigned to this delivery partner.
+   * Active deliveries (OUT_FOR_DELIVERY) first, then recently completed ones.
+   */
+  async findAssignedToPartner(partnerId: string) {
+    const [active, completed] = await Promise.all([
+      this.orderModel
+        .find({ deliveryPartnerId: partnerId, status: OrderStatus.OUT_FOR_DELIVERY })
+        .sort({ updatedAt: -1 }),
+      this.orderModel
+        .find({ deliveryPartnerId: partnerId, status: OrderStatus.COMPLETED })
+        .sort({ updatedAt: -1 })
+        .limit(20),
+    ]);
+    return { active, completed };
+  }
+
+  /**
+   * Delivery partner confirms delivery by entering the OTP the customer
+   * received after payment. Only works on orders assigned to this partner.
+   */
+  async completeDeliveryByPartner(orderId: string, partnerId: string, otp: string) {
+    const order = await this.orderModel.findOne({
+      _id: orderId,
+      deliveryPartnerId: partnerId,
+    });
+    if (!order) throw new NotFoundException('Order not found or not assigned to you');
+
+    if (order.status !== OrderStatus.OUT_FOR_DELIVERY) {
+      throw new BadRequestException('Order is not awaiting delivery confirmation');
+    }
+    if (!order.deliveryOtp) {
+      throw new BadRequestException('No delivery OTP found for this order.');
+    }
+    if (!otp || otp.trim() !== order.deliveryOtp) {
+      throw new BadRequestException('Invalid OTP. Please verify the code with the customer and try again.');
+    }
+
+    order.status = OrderStatus.COMPLETED;
+    order.statusHistory = [
+      ...(order.statusHistory ?? []),
+      { status: OrderStatus.COMPLETED, timestamp: new Date() },
+    ];
+    const updated = await order.save();
+
+    this.socketEvents.emitOrderUpdated({
+      _id: String(updated._id),
+      orderNumber: updated.orderNumber ?? '',
+      status: updated.status,
+      userId: updated.userId.toString(),
+    });
+    this.notificationsService
+      .notifyOrderStatus(
+        updated.userId.toString(),
+        updated.orderNumber ?? '',
+        OrderStatus.COMPLETED,
+      )
+      .catch(() => { /* swallow */ });
+
+    return updated;
   }
 
   // Status transition rules
