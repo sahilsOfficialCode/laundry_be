@@ -136,7 +136,7 @@ export class AuthController {
         httpOnly: true,
         secure: true,
         sameSite: 'none',
-        maxAge: 24 * 60 * 60 * 1000,
+        maxAge: 90 * 24 * 60 * 60 * 1000, // 90 days
       });
     }
 

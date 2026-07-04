@@ -20,6 +20,8 @@ import { LocationsModule } from '../locations/locations.module';
 import { ServiceZonesModule } from '../service-zones/service-zones.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { SupportModule } from '../support/support.module';
+import { UploadModule } from '../upload/upload.module';
+import { ClothTypesModule } from '../cloth-types/cloth-types.module';
 
 @Module({
   imports: [
@@ -34,6 +36,8 @@ import { SupportModule } from '../support/support.module';
     ServiceZonesModule,
     NotificationsModule,
     SupportModule,
+    UploadModule,
+    ClothTypesModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService],

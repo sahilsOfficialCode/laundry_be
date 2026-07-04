@@ -1,12 +1,53 @@
-import { Controller, Post, Delete, Body, UseGuards, Request, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, UseGuards, Request, HttpException, HttpStatus } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { UserRole } from '../users/schemas/user.schema';
 import { NotificationsService } from './notifications.service';
 import { RegisterFcmTokenDto } from './dto/register-fcm-token.dto';
 
 @Controller('notifications')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
+
+  // ── In-app notification bar ────────────────────────────────────────────────
+
+  /** Current user's notifications (latest 50) + unread count. */
+  @Get()
+  async getMyNotifications(@Request() req) {
+    const userId = req.user?.sub;
+    if (!userId) {
+      throw new HttpException('User not authenticated', HttpStatus.UNAUTHORIZED);
+    }
+    return this.notificationsService.getUserNotifications(userId);
+  }
+
+  /** Mark all of the current user's notifications as read. */
+  @Patch('read')
+  async markMyNotificationsRead(@Request() req) {
+    const userId = req.user?.sub;
+    if (!userId) {
+      throw new HttpException('User not authenticated', HttpStatus.UNAUTHORIZED);
+    }
+    await this.notificationsService.markUserNotificationsRead(userId);
+    return { success: true };
+  }
+
+  /** Admin panel notifications (latest 50) + unread count. */
+  @Get('admin')
+  @Roles(UserRole.ADMIN)
+  async getAdminNotifications() {
+    return this.notificationsService.getAdminNotifications();
+  }
+
+  /** Mark all admin notifications as read. */
+  @Patch('admin/read')
+  @Roles(UserRole.ADMIN)
+  async markAdminNotificationsRead() {
+    await this.notificationsService.markAdminNotificationsRead();
+    return { success: true };
+  }
 
   @Post('register-fcm-token')
   async registerFcmToken(

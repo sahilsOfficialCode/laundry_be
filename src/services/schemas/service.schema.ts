@@ -28,6 +28,14 @@ export class LaundryService {
 
   @Prop({ required: true, default: true })
   isAvailable!: boolean;
+
+  /** Marked by admin to appear in the "Popular Services" row on the home page. */
+  @Prop({ default: false, index: true })
+  isPopular?: boolean;
+
+  /** Position of the card in the popular row (1 = first). Only relevant when isPopular. */
+  @Prop({ required: false })
+  popularOrder?: number;
 }
 
 export const LaundryServiceSchema = SchemaFactory.createForClass(LaundryService);

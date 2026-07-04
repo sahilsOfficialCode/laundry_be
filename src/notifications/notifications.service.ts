@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User, UserDocument } from '../users/schemas/user.schema';
+import {
+  AppNotification,
+  AppNotificationDocument,
+} from './schemas/notification.schema';
 import { FirebaseAdminService } from './firebase-admin.service';
 
 /**
@@ -22,8 +26,83 @@ export class NotificationsService {
 
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(AppNotification.name)
+    private appNotificationModel: Model<AppNotificationDocument>,
     private firebaseAdminService: FirebaseAdminService,
   ) {}
+
+  // ── In-app notification store (notification bar) ───────────────────────────
+
+  /** Persist a notification so it shows up in the in-app notification bar. */
+  private async persist(record: {
+    audience: 'user' | 'admin';
+    userId?: string;
+    title: string;
+    body: string;
+    type?: string;
+    orderId?: string;
+  }): Promise<void> {
+    try {
+      await this.appNotificationModel.create(record);
+    } catch (err) {
+      this.logger.error(`Failed to persist notification: ${(err as Error).message}`);
+    }
+  }
+
+  /** Create an admin-panel notification (new order, cancellation, payment…). */
+  async notifyAdmin(payload: {
+    title: string;
+    body: string;
+    type?: string;
+    orderId?: string;
+  }): Promise<void> {
+    await this.persist({ audience: 'admin', ...payload });
+  }
+
+  async getUserNotifications(userId: string, limit = 50) {
+    const [data, unread] = await Promise.all([
+      this.appNotificationModel
+        .find({ audience: 'user', userId })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean(),
+      this.appNotificationModel.countDocuments({
+        audience: 'user',
+        userId,
+        isRead: false,
+      }),
+    ]);
+    return { data, unread };
+  }
+
+  async getAdminNotifications(limit = 50) {
+    const [data, unread] = await Promise.all([
+      this.appNotificationModel
+        .find({ audience: 'admin' })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean(),
+      this.appNotificationModel.countDocuments({
+        audience: 'admin',
+        isRead: false,
+      }),
+    ]);
+    return { data, unread };
+  }
+
+  async markUserNotificationsRead(userId: string): Promise<void> {
+    await this.appNotificationModel.updateMany(
+      { audience: 'user', userId, isRead: false },
+      { isRead: true },
+    );
+  }
+
+  async markAdminNotificationsRead(): Promise<void> {
+    await this.appNotificationModel.updateMany(
+      { audience: 'admin', isRead: false },
+      { isRead: true },
+    );
+  }
 
   /**
    * Send a push notification to a specific user.
@@ -40,6 +119,16 @@ export class NotificationsService {
       data?: Record<string, string>;
     },
   ): Promise<void> {
+    // Always store for the in-app notification bar, even if push fails/skips.
+    await this.persist({
+      audience: 'user',
+      userId,
+      title: payload.title,
+      body: payload.body,
+      type: payload.type,
+      orderId: payload.orderId,
+    });
+
     try {
       if (!this.firebaseAdminService.isInitialized()) {
         this.logger.warn('Firebase Admin SDK not initialized, skipping notification');
@@ -284,10 +373,30 @@ export class NotificationsService {
         body: `Your clothes for Order #${orderNumber} are ready for delivery.`,
         type: 'ready_for_delivery',
       },
+      ITEMIZED: {
+        title: 'Clothes Received ✅',
+        body: `Your clothes for Order #${orderNumber} have been received and itemized.`,
+        type: 'itemized',
+      },
+      PROCESSING: {
+        title: 'Washing Started 🧺',
+        body: `Your clothes for Order #${orderNumber} are being cleaned.`,
+        type: 'processing',
+      },
       OUT_FOR_DELIVERY: {
         title: 'Out for Delivery 🚀',
         body: `Your fresh clothes are on the way! Share your OTP when the rider arrives for Order #${orderNumber}.`,
         type: 'out_for_delivery',
+      },
+      COMPLETED: {
+        title: 'Delivered! 🎊',
+        body: `Order #${orderNumber} has been delivered successfully. Thank you for choosing LaundryBrew!`,
+        type: 'delivered',
+      },
+      CANCELLED: {
+        title: 'Order Cancelled ❌',
+        body: `Order #${orderNumber} has been cancelled.`,
+        type: 'cancelled',
       },
       DELIVERED: {
         title: 'Delivered! 🎊',

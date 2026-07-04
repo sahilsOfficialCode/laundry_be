@@ -13,6 +13,10 @@ import {
   LocationClosure,
   LocationClosureSchema,
 } from './schemas/location-closure.schema';
+import {
+  StandardTimeSlot,
+  StandardTimeSlotSchema,
+} from '../standard-time-slots/schemas/standard-time-slot.schema';
 
 @Module({
   imports: [
@@ -21,6 +25,7 @@ import {
       { name: LocationClosure.name, schema: LocationClosureSchema },
       { name: LocationAuditLog.name, schema: LocationAuditLogSchema },
       { name: Order.name, schema: OrderSchema },
+      { name: StandardTimeSlot.name, schema: StandardTimeSlotSchema },
     ]),
     AuthModule,
   ],
