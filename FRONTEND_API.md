@@ -218,6 +218,38 @@ Body: { orderId }
 Response: { success: true, order }
 ```
 
+### My Orders
+```
+GET /orders/my          — list of the user's orders (newest first)
+GET /orders/my/summary  — lightweight summary
+GET /orders/:id         — single order (owner only)
+Headers: Bearer token required
+```
+
+Each order includes (fields set by admin after pickup — may be absent before ITEMIZED):
+
+```
+{
+  status, statusHistory: [{ status, timestamp }],
+  weightKg,          // measured weight, set at itemization
+  itemCount,
+  billAmount,        // final bill after weighing (may differ from totalAmount)
+  weighingPhotos: [  // scale/bill proof — SHOW THIS to the user next to weightKg
+    { _id, url, uploadedAt }
+  ],
+  damagePhotos: [    // pre-existing damage evidence taken at pickup
+    { _id, url, note?, uploadedAt }
+  ],
+  ...
+}
+```
+
+→ **Order detail UI:** when `weightKg` is set, render it with `weighingPhotos[0].url`
+(direct public image URL, no auth needed) so the customer can verify the kg
+reading. If more than one weighing photo exists, show them in a small gallery.
+`damagePhotos` can be shown under a "Condition at pickup" section with each
+photo's `note`.
+
 ---
 
 ## FRONTEND — Global 401 Interceptor
