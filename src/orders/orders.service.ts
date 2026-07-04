@@ -22,6 +22,9 @@ import { LocationsService } from '../locations/locations.service';
 import { ServiceZonesService } from '../service-zones/service-zones.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SupportEventsService } from '../support/support-events.service';
+import { UploadService } from '../upload/upload.service';
+
+export type OrderPhotoType = 'damage' | 'weighing';
 
 /** Labels that are never subject to slot-level capacity checks. */
 const OPEN_SLOT_LABELS = new Set(['instant', 'full day', 'full-day']);
@@ -45,6 +48,7 @@ export class OrdersService {
     private readonly serviceZonesService: ServiceZonesService,
     private readonly notificationsService: NotificationsService,
     private readonly socketEvents: SupportEventsService,
+    private readonly uploadService: UploadService,
   ) {}
 
   // Create Order (legacy/direct)
@@ -392,6 +396,94 @@ export class OrdersService {
       .catch(() => { /* swallow — notification errors must not fail status update */ });
 
     return updatedOrder;
+  }
+
+  // ── ADMIN: Order photos (damage findings / weighing proof) ────────────────
+
+  /**
+   * Upload one or more photos against an order.
+   * type = 'damage'   → findings/evidence photos (optional note per photo)
+   * type = 'weighing' → scale/bill proof photos
+   * Photos are uploaded to R2 in parallel, then pushed atomically.
+   */
+  async addOrderPhotos(
+    orderId: string,
+    type: OrderPhotoType,
+    files: Express.Multer.File[],
+    notes: (string | undefined)[] = [],
+  ) {
+    if (!files?.length) throw new BadRequestException('No files provided');
+    if (files.length > 6) {
+      throw new BadRequestException('Maximum 6 photos per upload');
+    }
+    for (const f of files) {
+      if (!f.mimetype?.startsWith('image/')) {
+        throw new BadRequestException(`"${f.originalname}" is not an image`);
+      }
+      if (f.size > 8 * 1024 * 1024) {
+        throw new BadRequestException(`"${f.originalname}" exceeds the 8 MB limit`);
+      }
+    }
+
+    const order = await this.orderModel.findById(orderId);
+    if (!order) throw new NotFoundException('Order not found');
+    if (
+      order.status === OrderStatus.CANCELLED ||
+      order.status === OrderStatus.ORDER_PLACED
+    ) {
+      throw new BadRequestException(
+        'Photos can only be added after the order has been picked up.',
+      );
+    }
+
+    const field = type === 'damage' ? 'damagePhotos' : 'weighingPhotos';
+    if ((order[field]?.length ?? 0) + files.length > 12) {
+      throw new BadRequestException('Photo limit reached for this order (12).');
+    }
+
+    // Upload all files to R2 in parallel for performance
+    const uploaded = await Promise.all(
+      files.map((f) => this.uploadService.uploadImage(f, 'admin')),
+    );
+
+    const now = new Date();
+    const photos = uploaded.map((u, i) => ({
+      url: u.url,
+      imageId: u.imageId,
+      uploadedAt: now,
+      ...(type === 'damage' && notes[i]?.trim()
+        ? { note: notes[i]!.trim().slice(0, 300) }
+        : {}),
+    }));
+
+    order[field].push(...(photos as any));
+    const saved = await order.save();
+
+    this.socketEvents.emitOrderUpdated({
+      _id: String(saved._id),
+      orderNumber: saved.orderNumber ?? '',
+      status: saved.status,
+      userId: saved.userId.toString(),
+    });
+
+    return saved;
+  }
+
+  /** Remove a single photo by its subdocument _id. */
+  async removeOrderPhoto(orderId: string, type: OrderPhotoType, photoId: string) {
+    const order = await this.orderModel.findById(orderId);
+    if (!order) throw new NotFoundException('Order not found');
+
+    const field = type === 'damage' ? 'damagePhotos' : 'weighingPhotos';
+    const before = order[field].length;
+    order[field] = order[field].filter(
+      (p: any) => String(p._id) !== photoId,
+    ) as any;
+
+    if (order[field].length === before) {
+      throw new NotFoundException('Photo not found on this order');
+    }
+    return order.save();
   }
 
   // USER: Get order stats summary

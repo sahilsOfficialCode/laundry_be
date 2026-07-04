@@ -3,15 +3,21 @@ import {
   Post,
   Get,
   Patch,
+  Delete,
   Param,
   Body,
   UseGuards,
   Query,
   HttpCode,
   HttpStatus,
+  UploadedFiles,
+  UseInterceptors,
+  BadRequestException,
 } from '@nestjs/common';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 
-import { OrdersService } from './orders.service';
+import { OrdersService, OrderPhotoType } from './orders.service';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { OrderStatus } from './schemas/order.schema';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -72,6 +78,63 @@ export class OrdersController {
     @Body() dto: UpdateOrderStatusDto,
   ) {
     return this.ordersService.updateStatus(orderId, dto);
+  }
+
+  /**
+   * POST /orders/:id/photos
+   * Content-Type: multipart/form-data
+   * Fields:
+   *   files  — up to 6 images
+   *   type   — 'damage' (findings/evidence) | 'weighing' (scale/bill proof)
+   *   notes  — optional JSON array of strings, aligned with files (damage only)
+   */
+  @Post(':id/photos')
+  @Roles(UserRole.ADMIN)
+  @UseInterceptors(FilesInterceptor('files', 6, { storage: memoryStorage() }))
+  async addOrderPhotos(
+    @Param('id') orderId: string,
+    @UploadedFiles() files: Express.Multer.File[],
+    @Body('type') type: string,
+    @Body('notes') notesRaw?: string,
+  ) {
+    if (type !== 'damage' && type !== 'weighing') {
+      throw new BadRequestException("type must be 'damage' or 'weighing'");
+    }
+    let notes: (string | undefined)[] = [];
+    if (notesRaw) {
+      try {
+        const parsed = JSON.parse(notesRaw);
+        if (Array.isArray(parsed)) notes = parsed;
+      } catch {
+        notes = [notesRaw]; // plain string → single note
+      }
+    }
+    return this.ordersService.addOrderPhotos(
+      orderId,
+      type as OrderPhotoType,
+      files,
+      notes,
+    );
+  }
+
+  /**
+   * DELETE /orders/:id/photos/:photoId?type=damage|weighing
+   */
+  @Delete(':id/photos/:photoId')
+  @Roles(UserRole.ADMIN)
+  async removeOrderPhoto(
+    @Param('id') orderId: string,
+    @Param('photoId') photoId: string,
+    @Query('type') type: string,
+  ) {
+    if (type !== 'damage' && type !== 'weighing') {
+      throw new BadRequestException("type must be 'damage' or 'weighing'");
+    }
+    return this.ordersService.removeOrderPhoto(
+      orderId,
+      type as OrderPhotoType,
+      photoId,
+    );
   }
 
   /**

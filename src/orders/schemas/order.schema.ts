@@ -128,6 +128,52 @@ export class Order {
   @Prop({ required: false })
   ratingComment?: string;
 
+  // ── Order photos (uploaded by admin at collection/itemization) ────────────
+
+  /**
+   * Findings / damage evidence photos — taken by admin at pickup so there is
+   * proof of pre-existing damage if the customer later complains.
+   */
+  @Prop({
+    type: [
+      {
+        url: { type: String, required: true },
+        imageId: String,
+        note: String,
+        uploadedAt: { type: Date, default: Date.now },
+      },
+    ],
+    default: [],
+  })
+  damagePhotos: {
+    _id?: any;
+    url: string;
+    imageId?: string;
+    note?: string;
+    uploadedAt: Date;
+  }[];
+
+  /**
+   * Weighing / bill proof photos — scale reading uploaded with the bill so
+   * the customer can verify the kg calculation.
+   */
+  @Prop({
+    type: [
+      {
+        url: { type: String, required: true },
+        imageId: String,
+        uploadedAt: { type: Date, default: Date.now },
+      },
+    ],
+    default: [],
+  })
+  weighingPhotos: {
+    _id?: any;
+    url: string;
+    imageId?: string;
+    uploadedAt: Date;
+  }[];
+
   // ── Status history — one entry pushed every time status changes ────────────
   @Prop({
     type: [{ status: String, timestamp: Date }],
