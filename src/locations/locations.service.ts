@@ -41,6 +41,10 @@ import {
 } from './dto/resolve-location.dto';
 import { Order, OrderDocument, OrderStatus } from '../orders/schemas/order.schema';
 import {
+  StandardTimeSlot,
+  StandardTimeSlotDocument,
+} from '../standard-time-slots/schemas/standard-time-slot.schema';
+import {
   endOfDay,
   haversineDistanceKm,
   isPointInsidePolygon,
@@ -89,7 +93,26 @@ export class LocationsService implements OnModuleInit {
     private readonly locationAuditLogModel: Model<LocationAuditLogDocument>,
     @InjectModel(Order.name)
     private readonly orderModel: Model<OrderDocument>,
+    @InjectModel(StandardTimeSlot.name)
+    private readonly standardSlotModel: Model<StandardTimeSlotDocument>,
   ) {}
+
+  /**
+   * Admin-managed standard slots (added dynamically via the admin portal)
+   * are valid at every branch — location-level slot lists only restrict
+   * further when the label is not a known standard slot.
+   */
+  private async isActiveStandardSlot(slotKey: string): Promise<boolean> {
+    const escaped = slotKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const slot = await this.standardSlotModel
+      .findOne({
+        isActive: true,
+        label: { $regex: `^${escaped}$`, $options: 'i' },
+      })
+      .lean()
+      .exec();
+    return !!slot;
+  }
 
   /**
    * Ensure the 2dsphere index on geoPoint exists at startup.
@@ -972,21 +995,28 @@ export class LocationsService implements OnModuleInit {
     if (payload.pickupSlot && locationPickupSlots.length > 0) {
       const slotKey = payload.pickupSlot.trim().toLowerCase();
       if (!OPEN_SLOTS.has(slotKey)) {
-        const hasPickupSlot = locationPickupSlots.some(
-          (slot) => slot.label.trim().toLowerCase() === slotKey,
-        );
+        const hasPickupSlot =
+          locationPickupSlots.some(
+            (slot) => slot.label.trim().toLowerCase() === slotKey,
+          ) || (await this.isActiveStandardSlot(slotKey));
         if (!hasPickupSlot) {
           reasons.push({ code: 'NO_PICKUP_SLOTS_AVAILABLE', message: 'Selected pickup slot is not available at this branch' });
         }
       }
     }
 
+
     if (payload.deliverySlot && locationDeliverySlots.length > 0) {
       const slotKey = payload.deliverySlot.trim().toLowerCase();
       if (!OPEN_SLOTS.has(slotKey)) {
-        const hasDeliverySlot = locationDeliverySlots.some(
-          (slot) => slot.label.trim().toLowerCase() === slotKey,
-        );
+        // Delivery mirrors the pickup slot for scheduled orders (next day,
+        // same slot) — so a standard pickup slot label is also valid here.
+        const hasDeliverySlot =
+          locationDeliverySlots.some(
+            (slot) => slot.label.trim().toLowerCase() === slotKey,
+          ) ||
+          payload.pickupSlot?.trim().toLowerCase() === slotKey ||
+          (await this.isActiveStandardSlot(slotKey));
         if (!hasDeliverySlot) {
           reasons.push({
             code: 'NO_DELIVERY_SLOTS_AVAILABLE',

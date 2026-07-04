@@ -132,6 +132,10 @@ export class Order {
 
   deliverySlot?: string;
 
+  /** Scheduled orders: delivery lands on the same slot as pickup, next day. */
+  @Prop({ required: false })
+  deliveryDate?: Date;
+
 
 
   @Prop({ required: false })

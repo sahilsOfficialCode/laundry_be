@@ -40,6 +40,21 @@ export class CartService {
       cart = new this.cartModel({ userId, items: [], totalAmount: 0 });
     }
 
+    // One order type at a time: Instant and Scheduled services cannot be
+    // mixed in the same cart/order.
+    if (quantity > 0) {
+      const hasOtherCategory = cart.items.some(
+        (item) => (item.category ?? 'instant') !== category,
+      );
+      if (hasOtherCategory) {
+        throw new BadRequestException(
+          category === 'instant'
+            ? 'Your cart has Scheduled services. Please complete or clear that order before adding Instant services.'
+            : 'Your cart has Instant services. Please complete or clear that order before adding Scheduled services.',
+        );
+      }
+    }
+
     // Composite key: same service added from Instant tab vs Scheduled tab = separate line items
     const existingItem = cart.items.find(
       (item) =>

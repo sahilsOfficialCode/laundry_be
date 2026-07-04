@@ -436,6 +436,31 @@ export class OrdersService {
 
 
 
+    // Resolve pickup date once — reused for the delivery schedule below.
+    const resolvedPickupDate = checkoutContext.pickupDate
+      ? new Date(checkoutContext.pickupDate)
+      : assignedLocation
+        ? new Date()
+        : undefined;
+
+    // ── Delivery schedule ────────────────────────────────────────────────────
+    // Scheduled orders: delivery is exactly the same slot the user picked,
+    // but on the NEXT day (e.g. pickup 11 AM Jun 2 → delivery 11 AM Jun 3).
+    // Instant orders: same-day delivery, slot from the checkout context.
+    const isScheduledOrder = orderItems.some(
+      (i) => i.category === 'scheduled',
+    );
+    let deliverySlot = checkoutContext.deliverySlot;
+    let deliveryDate: Date | undefined = resolvedPickupDate;
+    if (isScheduledOrder && checkoutContext.pickupSlot) {
+      deliverySlot = checkoutContext.pickupSlot;
+      if (resolvedPickupDate) {
+        deliveryDate = new Date(
+          resolvedPickupDate.getTime() + 24 * 60 * 60 * 1000,
+        );
+      }
+    }
+
     // Create order
 
     const order = new this.orderModel({
@@ -470,19 +495,13 @@ export class OrdersService {
 
       address: checkoutContext.address,
 
-      pickupDate: checkoutContext.pickupDate
-
-        ? new Date(checkoutContext.pickupDate)
-
-        : assignedLocation
-
-          ? new Date()
-
-          : undefined,
+      pickupDate: resolvedPickupDate,
 
       pickupSlot: checkoutContext.pickupSlot,
 
-      deliverySlot: checkoutContext.deliverySlot,
+      deliverySlot,
+
+      deliveryDate,
 
       pickupTime: checkoutContext.pickupTime,
 
