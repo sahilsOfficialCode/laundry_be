@@ -50,6 +50,8 @@ import { UploadService } from '../upload/upload.service';
 
 import { ClothTypesService } from '../cloth-types/cloth-types.service';
 
+import { ReferralService } from '../referrals/services/referral.service';
+
 
 
 export type OrderPhotoType = 'damage' | 'weighing';
@@ -103,6 +105,8 @@ export class OrdersService {
     private readonly uploadService: UploadService,
 
     private readonly clothTypesService: ClothTypesService,
+
+    private readonly referralService: ReferralService,
 
   ) {}
 
@@ -911,6 +915,23 @@ export class OrdersService {
           orderId: updatedOrderNumber,
         })
         .catch(() => { /* swallow */ });
+    }
+
+    // ── Refer & Earn milestone hook (non-blocking) ────────────────────────────
+    // A COMPLETED order means it was delivered (OTP confirmed) and — since the
+    // delivery OTP is only issued after payment — already paid. This is the
+    // "first successful paid, delivered, non-cancelled order" that qualifies a
+    // referral for its reward. Failures here must never break order updates.
+    if (dto.status === OrderStatus.COMPLETED) {
+      this.referralService
+        .handleQualifyingOrder(updatedOrder.userId.toString(), {
+          _id: updatedOrder._id,
+          status: updatedOrder.status,
+          paymentStatus: (updatedOrder as any).paymentStatus,
+          billAmount: updatedOrder.billAmount,
+          totalAmount: updatedOrder.totalAmount,
+        })
+        .catch(() => { /* swallow — referral processing is best-effort */ });
     }
 
     return updatedOrder;

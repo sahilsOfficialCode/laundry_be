@@ -8,8 +8,10 @@ import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { UserRole } from '../users/schemas/user.schema';
 import { SendMobileOtpService } from './services/send-mobile-otp.service';
+import { FirebaseAdminService } from './services/firebase-admin.service';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -32,6 +34,18 @@ describe('AuthService', () => {
     sendOtp: jest.fn(),
   };
 
+  // Returns undefined for every key so AuthService falls back to default TTLs.
+  const configService = {
+    get: jest.fn().mockReturnValue(undefined),
+  };
+
+  const firebaseAdminService = {
+    verifyIdToken: jest.fn(),
+    extractPhoneNumber: jest.fn(),
+    normalizePhoneNumber: jest.fn((n: string) => n),
+    phoneNumbersMatch: jest.fn(),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -49,6 +63,14 @@ describe('AuthService', () => {
         {
           provide: SendMobileOtpService,
           useValue: sendMobileOtpService,
+        },
+        {
+          provide: ConfigService,
+          useValue: configService,
+        },
+        {
+          provide: FirebaseAdminService,
+          useValue: firebaseAdminService,
         },
       ],
     }).compile();

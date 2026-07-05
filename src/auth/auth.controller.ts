@@ -27,6 +27,22 @@ export class AuthController {
     private tokenBlacklistService: TokenBlacklistService,
   ) {}
 
+  /** Shared secure cookie attributes (kept in one place to avoid drift). */
+  private static readonly COOKIE_BASE = {
+    httpOnly: true, // not readable by JS — mitigates XSS token theft
+    secure: true, // HTTPS only
+    sameSite: 'none' as const, // needed for cross-origin frontend
+    path: '/',
+  };
+
+  /** Set the auth cookie with a maxAge that matches the JWT's own lifetime. */
+  private setAuthCookie(response: Response, result: { access_token: string; maxAge: number }) {
+    response.cookie('access_token', result.access_token, {
+      ...AuthController.COOKIE_BASE,
+      maxAge: result.maxAge,
+    });
+  }
+
   @Public()
   @HttpCode(HttpStatus.OK)
   @Post('login')
@@ -36,14 +52,8 @@ export class AuthController {
   ) {
     const result = await this.authService.login(signInDto);
 
-    // Set the token as a cookie
-    // Adding reasonable defaults, like generic maxAge or handled per JWT config, here setting 1 day
-    response.cookie('access_token', result.access_token, {
-      httpOnly: true,
-      secure: true, // Requires HTTPS, devtunnels uses HTTPS
-      sameSite: 'none', // Needed for cross-origin requests
-      maxAge: 24 * 60 * 60 * 1000,
-    });
+    // Cookie lifetime mirrors the JWT lifetime (admin 24h, others ~3 months).
+    this.setAuthCookie(response, result);
 
     return result;
   }
@@ -64,12 +74,7 @@ export class AuthController {
   ) {
     const result = await this.authService.verifyMobileOtp(verifyMobileOtpDto);
     if ('access_token' in result) {
-      response.cookie('access_token', result.access_token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'none',
-        maxAge: 24 * 60 * 60 * 1000,
-      });
+      this.setAuthCookie(response, result);
     }
 
     return result;
@@ -101,11 +106,7 @@ export class AuthController {
       }
     }
 
-    response.clearCookie('access_token', {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'none',
-    });
+    response.clearCookie('access_token', AuthController.COOKIE_BASE);
     return { message: 'Logged out successfully' };
   }
 
@@ -132,12 +133,7 @@ export class AuthController {
   ) {
     const result = await this.authService.firebaseLogin(firebaseLoginDto);
     if ('access_token' in result) {
-      response.cookie('access_token', result.access_token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'none',
-        maxAge: 90 * 24 * 60 * 60 * 1000, // 90 days
-      });
+      this.setAuthCookie(response, result);
     }
 
     return result;

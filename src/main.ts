@@ -14,7 +14,15 @@ async function bootstrap() {
   });
 
   app.use(cookieParser());
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
+  // transform + implicit conversion lets DTOs coerce query/param strings to
+  // their declared types (e.g. numeric pagination) and apply default values.
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      transformOptions: { enableImplicitConversion: true },
+    }),
+  );
   await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
 }
 bootstrap();
