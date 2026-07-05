@@ -809,9 +809,7 @@ export class OrdersService {
         order.billAmount = dto.billAmount;
       }
 
-      if (!dto.pickupTime && !order.pickupTime) {
-        throw new BadRequestException('Pickup time is required when itemizing an order.');
-      }
+      // Pickup time is optional — set it only if provided.
 
       if (dto.weightKg != null) order.weightKg = dto.weightKg;
       if (dto.itemCount != null) order.itemCount = dto.itemCount;

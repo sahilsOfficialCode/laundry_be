@@ -104,6 +104,24 @@ export class NotificationsService {
     );
   }
 
+  /** Mark a single admin notification as read. */
+  async markAdminNotificationRead(id: string): Promise<void> {
+    await this.appNotificationModel.updateOne(
+      { _id: id, audience: 'admin' },
+      { isRead: true },
+    );
+  }
+
+  /** Remove (clear) a single admin notification from the list. */
+  async deleteAdminNotification(id: string): Promise<void> {
+    await this.appNotificationModel.deleteOne({ _id: id, audience: 'admin' });
+  }
+
+  /** Clear all admin notifications. */
+  async clearAdminNotifications(): Promise<void> {
+    await this.appNotificationModel.deleteMany({ audience: 'admin' });
+  }
+
   /**
    * Send a push notification to a specific user.
    * Sends to all devices (all FCM tokens) registered for the user.
