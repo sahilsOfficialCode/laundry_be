@@ -386,6 +386,8 @@ export class OrdersService {
 
           category: (item as any).category ?? 'instant',
 
+          turnaroundHours: service.turnaroundHours ?? 24,
+
         };
 
       }),
@@ -450,19 +452,24 @@ export class OrdersService {
         : undefined;
 
     // ── Delivery schedule ────────────────────────────────────────────────────
-    // Scheduled orders: delivery is exactly the same slot the user picked,
-    // but on the NEXT day (e.g. pickup 11 AM Jun 2 → delivery 11 AM Jun 3).
+    // Scheduled orders: delivery is the same slot the user picked, but shifted
+    // forward by the order's turnaround (e.g. 24h → next day, 48h → day after
+    // next). Turnaround is per-service (see LaundryService.turnaroundHours,
+    // default 24) — an order mixing services uses the longest one, since the
+    // whole order is delivered together.
     // Instant orders: same-day delivery, slot from the checkout context.
-    const isScheduledOrder = orderItems.some(
-      (i) => i.category === 'scheduled',
-    );
+    const scheduledItems = orderItems.filter((i) => i.category === 'scheduled');
+    const isScheduledOrder = scheduledItems.length > 0;
+    const turnaroundHours = isScheduledOrder
+      ? Math.max(...scheduledItems.map((i) => i.turnaroundHours ?? 24))
+      : 24;
     let deliverySlot = checkoutContext.deliverySlot;
     let deliveryDate: Date | undefined = resolvedPickupDate;
     if (isScheduledOrder && checkoutContext.pickupSlot) {
       deliverySlot = checkoutContext.pickupSlot;
       if (resolvedPickupDate) {
         deliveryDate = new Date(
-          resolvedPickupDate.getTime() + 24 * 60 * 60 * 1000,
+          resolvedPickupDate.getTime() + turnaroundHours * 60 * 60 * 1000,
         );
       }
     }
