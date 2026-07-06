@@ -780,19 +780,23 @@ export class OrdersService {
         const clothTypes = await this.clothTypesService.findByIds(clothTypeIds);
         const clothTypeMap = new Map(clothTypes.map(c => [c._id.toString(), c]));
 
-        // The whole order is either all-instant or all-scheduled (cart enforces
-        // mutual exclusion), so a single flag picks the right rate for every line.
+        // Default when a line doesn't specify its own serviceType: derive it
+        // from the order's items (normally all-instant or all-scheduled, since
+        // the cart enforces mutual exclusion at add-time).
         const isScheduledOrder = (order.items ?? []).some(
           (i: any) => i.category === 'scheduled',
         );
+        const defaultServiceType = isScheduledOrder ? 'scheduled' : 'instant';
 
         const clothBreakdownWithCalc = dto.clothTypeBreakdown.map(item => {
           const clothType = clothTypeMap.get(item.clothTypeId);
           if (!clothType) {
             throw new BadRequestException(`Cloth type with ID ${item.clothTypeId} not found`);
           }
-          const baseRate = isScheduledOrder ? clothType.scheduledRate : clothType.instantRate;
-          const discountRate = isScheduledOrder
+          const serviceType = item.serviceType ?? defaultServiceType;
+          const isScheduled = serviceType === 'scheduled';
+          const baseRate = isScheduled ? clothType.scheduledRate : clothType.instantRate;
+          const discountRate = isScheduled
             ? clothType.discountScheduledRate
             : clothType.discountInstantRate;
           const rate = discountRate ?? baseRate;
@@ -803,6 +807,7 @@ export class OrdersService {
             quantity: item.quantity,
             rate,
             amount,
+            serviceType,
           };
         });
 

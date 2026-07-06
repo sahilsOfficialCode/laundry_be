@@ -248,6 +248,7 @@ export class Order {
         quantity: { type: Number, required: true },
         rate: { type: Number, required: true },
         amount: { type: Number, required: true },
+        serviceType: { type: String, required: false },
       },
     ],
     default: [],
@@ -264,6 +265,8 @@ export class Order {
     rate: number;
 
     amount: number;
+
+    serviceType?: string;
 
   }[];
 
