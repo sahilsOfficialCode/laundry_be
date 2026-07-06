@@ -19,8 +19,32 @@ export class ClothTypesService {
     if (existing) {
       throw new BadRequestException('Cloth type with this name already exists');
     }
+    this.validateDiscounts(
+      createClothTypeDto.instantRate,
+      createClothTypeDto.scheduledRate,
+      createClothTypeDto.discountInstantRate,
+      createClothTypeDto.discountScheduledRate,
+    );
     const clothType = new this.clothTypeModel(createClothTypeDto);
     return clothType.save();
+  }
+
+  private validateDiscounts(
+    instantRate: number,
+    scheduledRate: number,
+    discountInstantRate?: number,
+    discountScheduledRate?: number,
+  ) {
+    if (discountInstantRate != null && discountInstantRate >= instantRate) {
+      throw new BadRequestException(
+        'Discount instant rate must be less than the instant rate',
+      );
+    }
+    if (discountScheduledRate != null && discountScheduledRate >= scheduledRate) {
+      throw new BadRequestException(
+        'Discount scheduled rate must be less than the scheduled rate',
+      );
+    }
   }
 
   async findAll() {
@@ -51,6 +75,12 @@ export class ClothTypesService {
     }
 
     Object.assign(clothType, updateClothTypeDto);
+    this.validateDiscounts(
+      clothType.instantRate,
+      clothType.scheduledRate,
+      clothType.discountInstantRate,
+      clothType.discountScheduledRate,
+    );
     return clothType.save();
   }
 

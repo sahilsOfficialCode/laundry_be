@@ -1,4 +1,5 @@
-import { IsNumber, IsOptional, IsString, IsBoolean } from 'class-validator';
+import { IsNumber, IsOptional, IsString, IsBoolean, IsIn, Min } from 'class-validator';
+import { CLOTH_TYPE_CATEGORIES, CLOTH_TYPE_SUBCATEGORIES } from './create-cloth-type.dto';
 
 export class UpdateClothTypeDto {
   @IsOptional()
@@ -7,15 +8,35 @@ export class UpdateClothTypeDto {
 
   @IsOptional()
   @IsNumber()
-  rate?: number;
+  @Min(0)
+  instantRate?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  scheduledRate?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  discountInstantRate?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  discountScheduledRate?: number;
 
   @IsOptional()
   @IsString()
   description?: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(CLOTH_TYPE_CATEGORIES)
   category?: string;
+
+  @IsOptional()
+  @IsIn(CLOTH_TYPE_SUBCATEGORIES)
+  subcategory?: string;
 
   @IsOptional()
   @IsBoolean()
