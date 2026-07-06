@@ -26,6 +26,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/schemas/user.schema';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { CheckoutContextDto } from './dto/checkout-context.dto';
+import { UpdateDeliveryDetailsDto } from './dto/update-delivery-details.dto';
 
 @Controller('orders')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -78,6 +79,20 @@ export class OrdersController {
   @Post(':id/cancel')
   async cancelMyOrder(@Param('id') orderId: string, @GetUser() user: any) {
     return this.ordersService.cancelByUser(orderId, user.sub);
+  }
+
+  /**
+   * PATCH /orders/:id/delivery-details
+   * User re-confirms or changes self-pickup vs home-delivery (and the
+   * delivery address) any time before payment is completed.
+   */
+  @Patch(':id/delivery-details')
+  async updateDeliveryDetails(
+    @Param('id') orderId: string,
+    @Body() dto: UpdateDeliveryDetailsDto,
+    @GetUser() user: any,
+  ) {
+    return this.ordersService.updateDeliveryDetails(orderId, user.sub, dto);
   }
 
   /**

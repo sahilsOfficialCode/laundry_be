@@ -7,6 +7,7 @@ import {
   AppNotificationDocument,
 } from './schemas/notification.schema';
 import { FirebaseAdminService } from './firebase-admin.service';
+import { DeliveryType } from '../orders/schemas/order.schema';
 
 /**
  * NotificationsService
@@ -364,7 +365,10 @@ export class NotificationsService {
     userId: string,
     orderNumber: string,
     status: string,
+    deliveryType: DeliveryType = DeliveryType.HOME_DELIVERY,
   ): Promise<void> {
+    const isSelfPickup = deliveryType === DeliveryType.SELF_PICKUP;
+
     const messages: Record<string, { title: string; body: string; type: string }> = {
       ORDER_PLACED: {
         title: 'Order Confirmed! 🎉',
@@ -406,11 +410,24 @@ export class NotificationsService {
         body: `Your fresh clothes are on the way! Share your OTP when the rider arrives for Order #${orderNumber}.`,
         type: 'out_for_delivery',
       },
-      COMPLETED: {
-        title: 'Delivered! 🎊',
-        body: `Order #${orderNumber} has been delivered successfully. Thank you for choosing LaundryBrew!`,
-        type: 'delivered',
+      // SELF_PICKUP-only status — no "on the way" notification is ever sent
+      // for these orders; this is the equivalent milestone.
+      READY_FOR_PICKUP: {
+        title: 'Ready for Pickup 🎉',
+        body: `Your order #${orderNumber} is ready — come collect it at our shop! Bring your OTP.`,
+        type: 'ready_for_pickup',
       },
+      COMPLETED: isSelfPickup
+        ? {
+            title: 'Order Collected! 🎊',
+            body: `Order #${orderNumber} has been picked up successfully. Thank you for choosing LaundryBrew!`,
+            type: 'delivered',
+          }
+        : {
+            title: 'Delivered! 🎊',
+            body: `Order #${orderNumber} has been delivered successfully. Thank you for choosing LaundryBrew!`,
+            type: 'delivered',
+          },
       CANCELLED: {
         title: 'Order Cancelled ❌',
         body: `Order #${orderNumber} has been cancelled.`,

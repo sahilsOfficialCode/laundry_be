@@ -14,7 +14,7 @@ import { Model, isValidObjectId } from 'mongoose';
 
 
 
-import { Order, OrderDocument, OrderStatus } from './schemas/order.schema';
+import { Order, OrderDocument, OrderStatus, DeliveryType, PaymentStatus } from './schemas/order.schema';
 
 import { Cart, CartDocument } from '../cart/schemas/cart.schema';
 
@@ -37,6 +37,8 @@ import {
 import { CheckoutContextDto } from './dto/checkout-context.dto';
 
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+
+import { UpdateDeliveryDetailsDto } from './dto/update-delivery-details.dto';
 
 import { LocationsService } from '../locations/locations.service';
 
@@ -465,6 +467,16 @@ export class OrdersService {
       }
     }
 
+    // ── Return-delivery choice ────────────────────────────────────────────────
+    // How the *finished* order gets back to the customer — independent of how
+    // the dirty laundry was collected (checkoutContext.address / serviceType).
+    const deliveryType = checkoutContext.deliveryType ?? DeliveryType.HOME_DELIVERY;
+    if (deliveryType === DeliveryType.HOME_DELIVERY && !checkoutContext.deliveryAddress) {
+      throw new BadRequestException(
+        'A delivery address is required when choosing home delivery for your finished order.',
+      );
+    }
+
     // Create order
 
     const order = new this.orderModel({
@@ -498,6 +510,11 @@ export class OrdersService {
         : undefined,
 
       address: checkoutContext.address,
+
+      deliveryType,
+
+      deliveryAddress:
+        deliveryType === DeliveryType.HOME_DELIVERY ? checkoutContext.deliveryAddress : undefined,
 
       pickupDate: resolvedPickupDate,
 
@@ -634,6 +651,35 @@ export class OrdersService {
     return cancelled;
   }
 
+  /**
+   * USER: Re-confirm or change how the finished order will get back to them
+   * (self-pickup vs home-delivery). Allowed any time before payment is
+   * completed — once paid (deliveryOtp generated), the choice is locked in
+   * since admin/dispatch planning depends on it.
+   */
+  async updateDeliveryDetails(orderId: string, userId: string, dto: UpdateDeliveryDetailsDto) {
+    const order = await this.orderModel.findOne({ _id: orderId, userId });
+    if (!order) throw new NotFoundException('Order not found');
+
+    if (order.paymentStatus === PaymentStatus.COMPLETED) {
+      throw new BadRequestException(
+        'Payment has already been made — delivery details can no longer be changed.',
+      );
+    }
+
+    if (dto.deliveryType === DeliveryType.HOME_DELIVERY && !dto.deliveryAddress) {
+      throw new BadRequestException(
+        'A delivery address is required when choosing home delivery for your finished order.',
+      );
+    }
+
+    order.deliveryType = dto.deliveryType;
+    order.deliveryAddress =
+      dto.deliveryType === DeliveryType.HOME_DELIVERY ? dto.deliveryAddress : undefined;
+
+    return order.save();
+  }
+
   // Get all orders for user
 
   async findMyOrders(userId: string) {
@@ -730,7 +776,7 @@ export class OrdersService {
 
 
 
-    if (!this.isValidTransition(order.status, dto.status)) {
+    if (!this.isValidTransition(order, dto.status)) {
 
       throw new BadRequestException(
 
@@ -861,6 +907,20 @@ export class OrdersService {
 
 
 
+    // READY_FOR_PICKUP → self-pickup orders skip driver/partner assignment;
+    // OTP must already exist (payment done), same gate as OUT_FOR_DELIVERY.
+    if (dto.status === OrderStatus.READY_FOR_PICKUP) {
+
+      if (!order.deliveryOtp) {
+
+        throw new BadRequestException('Cannot mark ready for pickup: payment has not been completed yet. The user must pay first.');
+
+      }
+
+    }
+
+
+
     // COMPLETED → admin must enter the OTP to confirm delivery
 
     if (dto.status === OrderStatus.COMPLETED) {
@@ -917,16 +977,23 @@ export class OrdersService {
 
         dto.status,
 
+        updatedOrder.deliveryType,
+
       )
 
       .catch(() => { /* swallow — notification errors must not fail status update */ });
 
     // Admin notification bar for important transitions (non-blocking)
     if (dto.status === OrderStatus.CANCELLED || dto.status === OrderStatus.COMPLETED) {
+      const isSelfPickup = updatedOrder.deliveryType === DeliveryType.SELF_PICKUP;
       this.notificationsService
         .notifyAdmin({
-          title: dto.status === OrderStatus.CANCELLED ? 'Order Cancelled ❌' : 'Order Delivered ✅',
-          body: `Order #${updatedOrderNumber} was ${dto.status === OrderStatus.CANCELLED ? 'cancelled' : 'delivered'}.`,
+          title: dto.status === OrderStatus.CANCELLED
+            ? 'Order Cancelled ❌'
+            : isSelfPickup ? 'Order Picked Up ✅' : 'Order Delivered ✅',
+          body: `Order #${updatedOrderNumber} was ${
+            dto.status === OrderStatus.CANCELLED ? 'cancelled' : isSelfPickup ? 'picked up by the customer' : 'delivered'
+          }.`,
           type: dto.status === OrderStatus.CANCELLED ? 'order_cancelled' : 'order_completed',
           orderId: updatedOrderNumber,
         })
@@ -1383,8 +1450,13 @@ export class OrdersService {
 
 
   // Status transition rules
+  //
+  // PROCESSING branches on the order's deliveryType: HOME_DELIVERY orders go
+  // out for delivery; SELF_PICKUP orders become ready for the customer to
+  // collect in-store. Both converge on COMPLETED via the same OTP check.
+  private isValidTransition(order: OrderDocument, next: OrderStatus): boolean {
 
-  private isValidTransition(current: OrderStatus, next: OrderStatus): boolean {
+    const current = order.status;
 
     const transitions: Record<OrderStatus, OrderStatus[]> = {
 
@@ -1394,9 +1466,15 @@ export class OrdersService {
 
       [OrderStatus.ITEMIZED]:         [OrderStatus.PROCESSING],
 
-      [OrderStatus.PROCESSING]:       [OrderStatus.OUT_FOR_DELIVERY],
+      [OrderStatus.PROCESSING]:       [
+        order.deliveryType === DeliveryType.SELF_PICKUP
+          ? OrderStatus.READY_FOR_PICKUP
+          : OrderStatus.OUT_FOR_DELIVERY,
+      ],
 
       [OrderStatus.OUT_FOR_DELIVERY]: [OrderStatus.COMPLETED],
+
+      [OrderStatus.READY_FOR_PICKUP]: [OrderStatus.COMPLETED],
 
       [OrderStatus.COMPLETED]:        [],
 
