@@ -10,6 +10,7 @@ import { User, UserSchema } from '../users/schemas/user.schema';
 import { Order, OrderSchema } from '../orders/schemas/order.schema';
 import { PaymentsModule } from '../payments/payments.module';
 import { AuthModule } from '../auth/auth.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { AuthModule } from '../auth/auth.module';
     ]),
     PaymentsModule,
     AuthModule,
+    NotificationsModule,
   ],
   controllers: [WalletController],
   providers: [WalletService],
