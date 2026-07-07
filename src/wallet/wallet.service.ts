@@ -16,6 +16,7 @@ import {
 } from '../orders/schemas/order.schema';
 import { PaymentsService } from '../payments/payments.service';
 import { CreateAddMoneyOrderDto, VerifyAddMoneyDto } from './dto/add-money.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class WalletService {
@@ -27,6 +28,7 @@ export class WalletService {
     @InjectModel(Order.name)
     private readonly orderModel: Model<OrderDocument>,
     private readonly paymentsService: PaymentsService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   // ── GET /wallet ────────────────────────────────────────────────────────────
@@ -191,11 +193,30 @@ export class WalletService {
       referenceOrderId: String(order._id),
     });
 
-    // Mark order payment as completed.
+    // Mark order payment as completed and generate the delivery OTP —
+    // mirrors payments.controller.ts's verifyPayment (Razorpay) flow, so the
+    // dispatch/ready-for-pickup gate (which checks order.deliveryOtp) passes.
+    const deliveryOtp = String(Math.floor(1000 + Math.random() * 9000));
     await this.orderModel.findByIdAndUpdate(orderId, {
       paymentStatus: PaymentStatus.COMPLETED,
       paymentMethod: 'wallet',
+      deliveryOtp,
     });
+
+    // Fire payment success push notification (non-blocking)
+    this.notificationsService
+      .notifyPaymentSuccess(userId, order.orderNumber ?? '')
+      .catch(() => { /* swallow — notification errors must not fail payment */ });
+
+    // Admin notification bar: payment received (non-blocking)
+    this.notificationsService
+      .notifyAdmin({
+        title: 'Payment Received 💳',
+        body: `Payment confirmed for Order #${order.orderNumber ?? ''} — ₹${order.billAmount ?? 0}.`,
+        type: 'payment_success',
+        orderId: order.orderNumber ?? '',
+      })
+      .catch(() => { /* swallow */ });
 
     return {
       success: true,
