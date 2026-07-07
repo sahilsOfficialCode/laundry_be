@@ -13,6 +13,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UserAddressDto } from './dto/user-address.dto';
 import { GetAddressesFilterDto } from './dto/get-addresses-filter.dto';
 import { ServiceZonesService } from '../service-zones/service-zones.service';
+import { generateReferralCode } from '../referrals/utils/referral-code.util';
 
 /** Address types that skip service-zone coverage checks (customer can be anywhere) */
 const EXEMPT_ADDRESS_TYPES = ['pickup', 'drop'];
@@ -47,6 +48,21 @@ export class UsersService {
     return this.createUser(createUserDto);
   }
 
+  /**
+   * Generate a unique, permanent referral code for a new user.
+   * Uses the shared generator (crypto-random) and retries on the rare
+   * collision. Kept here (using the util directly) to avoid a circular
+   * dependency between UsersModule and ReferralModule.
+   */
+  private async generateUniqueReferralCode(): Promise<string> {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const code = generateReferralCode();
+      const exists = await this.userModel.exists({ referralCode: code });
+      if (!exists) return code;
+    }
+    return generateReferralCode(9); // widen space on repeated collisions
+  }
+
   private async createUser(createUserDto: CreateUserDto): Promise<any> {
     const { email, password, name } = createUserDto;
 
@@ -61,6 +77,7 @@ export class UsersService {
       email,
       password: hashedPassword,
       role: UserRole.USER,
+      referralCode: await this.generateUniqueReferralCode(),
     });
 
     const savedUser = await createdUser.save();
@@ -99,6 +116,7 @@ export class UsersService {
     const randomPassword = crypto.randomBytes(16).toString('hex');
     const hashedPassword = await bcrypt.hash(randomPassword, 10);
     const userName = name?.trim() ? name.trim() : 'Laundry Customer';
+    const referralCode = await this.generateUniqueReferralCode();
 
     try {
       const user = await this.userModel.findOneAndUpdate(
@@ -110,6 +128,7 @@ export class UsersService {
             password: hashedPassword,
             role: UserRole.USER,
             isActive: true,
+            referralCode,
           },
         },
         {
@@ -170,6 +189,24 @@ export class UsersService {
 
   async findById(id: string): Promise<any> {
     return this.userModel.findById(id).select('-password');
+  }
+
+  /**
+   * Lightweight status lookup used by JwtAuthGuard on each request to enforce
+   * account deletion / "logout from every device". Returns only the few fields
+   * needed so it stays cheap (indexed _id lookup, lean).
+   */
+  async getAuthStatus(
+    id: string,
+  ): Promise<{
+    isDeleted: boolean;
+    isActive: boolean;
+    sessionsValidFrom?: Date | null;
+  } | null> {
+    return this.userModel
+      .findById(id)
+      .select('isDeleted isActive sessionsValidFrom')
+      .lean() as any;
   }
 
   async blockUser(id: string): Promise<any> {

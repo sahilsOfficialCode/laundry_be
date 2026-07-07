@@ -48,6 +48,13 @@ email?: string;
   @Prop({ enum: UserRole, default: UserRole.USER, required: true })
   role: UserRole;
 
+  /**
+   * Permanent, unique, auto-generated referral code (Refer & Earn).
+   * Assigned at registration; never editable by the user.
+   */
+  @Prop({ required: false, unique: true, sparse: true, index: true })
+  referralCode?: string;
+
   @Prop()
   passwordResetToken?: string;
 
@@ -56,6 +63,36 @@ email?: string;
 
   @Prop({ default: true })
   isActive: boolean;
+
+  // ── Account deletion (Google Play compliant soft-delete) ───────────────────
+  /** Soft-delete flag. Deleted users are rejected by JwtAuthGuard everywhere. */
+  @Prop({ default: false, index: true })
+  isDeleted: boolean;
+
+  /** ACTIVE | PENDING_DELETION | DELETED | ANONYMIZED */
+  @Prop({ default: 'ACTIVE', index: true })
+  accountStatus: string;
+
+  @Prop({ required: false, default: null })
+  deletedAt?: Date;
+
+  @Prop({ required: false, default: null })
+  deletedReason?: string;
+
+  @Prop({ required: false, default: null })
+  deletedReasonComment?: string;
+
+  /** Personal data has been stripped/anonymised by the cleanup job. */
+  @Prop({ required: false, default: null })
+  anonymizedAt?: Date;
+
+  /**
+   * Any JWT issued before this instant is treated as invalid ("logout from
+   * every device"). Set to now() on account deletion. Compared against the
+   * token's `iat` claim in JwtAuthGuard.
+   */
+  @Prop({ required: false, default: null })
+  sessionsValidFrom?: Date;
 
   /** FCM device tokens for push notifications. Supports multiple devices per user. */
   @Prop({ required: false, default: [] })

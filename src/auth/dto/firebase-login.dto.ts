@@ -1,16 +1,11 @@
-import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsMobileNumber } from '../../common/validators/is-mobile-number.validator';
 
 export class FirebaseLoginDto {
   @IsString()
   firebaseIdToken: string;
 
-  @IsString()
-  @MinLength(10)
-  @MaxLength(16)
-  @Matches(/^\+?[0-9]{10,15}$/, {
-    message:
-      'mobileNumber must contain only digits and can optionally start with +',
-  })
+  @IsMobileNumber()
   mobileNumber: string;
 
   @IsOptional()

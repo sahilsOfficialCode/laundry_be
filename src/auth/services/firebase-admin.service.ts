@@ -1,6 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { initializeApp, getApps, cert, App } from 'firebase-admin/app';
 import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
+import { toE164 } from '../../common/validators/is-mobile-number.validator';
 
 @Injectable()
 export class FirebaseAdminService {
@@ -87,15 +88,19 @@ export class FirebaseAdminService {
   }
 
   /**
-   * Normalize phone number to E.164 format
-   * Ensures consistent format: + followed by digits only
-   * Examples: +919876543210, +1234567890
+   * Normalize a phone number to canonical E.164 format (e.g. +919876543210).
+   *
+   * Uses libphonenumber to correctly interpret national-format numbers
+   * (e.g. a bare 10-digit Indian mobile becomes +91XXXXXXXXXX). Falls back to
+   * a plain "+<digits>" form only when the number cannot be parsed, preserving
+   * the previous behaviour for already-normalized inputs.
    */
   normalizePhoneNumber(phoneNumber: string): string {
-    // Remove all non-digit characters
+    const e164 = toE164(phoneNumber);
+    if (e164) return e164;
+
+    // Fallback: strip non-digits and prefix '+' (legacy behaviour).
     const digitsOnly = phoneNumber.replace(/\D/g, '');
-    
-    // Ensure it starts with + (E.164 format)
     return '+' + digitsOnly;
   }
 

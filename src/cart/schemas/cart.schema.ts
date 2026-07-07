@@ -23,6 +23,10 @@ class CartItem {
   /** 'instant' | 'scheduled' — which tab the user added this service from */
   @Prop({ required: false, default: 'instant' })
   category?: string;
+
+  /** Snapshot of the service's turnaround hours at add-time (see LaundryService.turnaroundHours). */
+  @Prop({ required: false, default: 24 })
+  turnaroundHoursSnapshot?: number;
 }
 
 @Schema({ timestamps: true })

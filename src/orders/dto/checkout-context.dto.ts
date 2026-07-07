@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsDateString,
+  IsEnum,
   IsOptional,
   IsString,
   Matches,
@@ -8,7 +9,11 @@ import {
   Min,
   IsNumber,
   ValidateIf,
+  ValidateNested,
 } from 'class-validator';
+
+import { DeliveryType } from '../schemas/order.schema';
+import { DeliveryAddressDto } from './delivery-address.dto';
 
 export class CheckoutContextDto {
   @IsOptional()
@@ -53,4 +58,15 @@ export class CheckoutContextDto {
   @IsOptional()
   @IsString()
   city?: string;
+
+  /** How the finished order should get back to the customer. Defaults to HOME_DELIVERY. */
+  @IsOptional()
+  @IsEnum(DeliveryType)
+  deliveryType?: DeliveryType;
+
+  /** Required when deliveryType is HOME_DELIVERY — freshly chosen from saved addresses. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DeliveryAddressDto)
+  deliveryAddress?: DeliveryAddressDto;
 }

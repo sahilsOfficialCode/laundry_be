@@ -40,12 +40,19 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('Token has been revoked. Please log in again.');
     }
 
+    let payload: any;
     try {
       const result = await this.authService.verifyToken(token);
-      request.user = result.user;
-      return true;
+      payload = result.user;
     } catch (e) {
       throw new UnauthorizedException('Invalid or expired token');
     }
+
+    // Enforce account deletion / "logout from every device" (throws 401 when
+    // the account is deleted/disabled or the token predates sessionsValidFrom).
+    await this.authService.assertAccountActive(payload?.sub, payload?.iat);
+
+    request.user = payload;
+    return true;
   }
 }

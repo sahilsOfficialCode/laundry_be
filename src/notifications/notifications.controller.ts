@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, UseGuards, Request, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Request, HttpException, HttpStatus } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -46,6 +46,30 @@ export class NotificationsController {
   @Roles(UserRole.ADMIN)
   async markAdminNotificationsRead() {
     await this.notificationsService.markAdminNotificationsRead();
+    return { success: true };
+  }
+
+  /** Mark a single admin notification as read. */
+  @Patch('admin/:id/read')
+  @Roles(UserRole.ADMIN)
+  async markAdminNotificationRead(@Param('id') id: string) {
+    await this.notificationsService.markAdminNotificationRead(id);
+    return { success: true };
+  }
+
+  /** Clear (delete) all admin notifications. */
+  @Delete('admin')
+  @Roles(UserRole.ADMIN)
+  async clearAdminNotifications() {
+    await this.notificationsService.clearAdminNotifications();
+    return { success: true };
+  }
+
+  /** Clear (delete) a single admin notification. */
+  @Delete('admin/:id')
+  @Roles(UserRole.ADMIN)
+  async deleteAdminNotification(@Param('id') id: string) {
+    await this.notificationsService.deleteAdminNotification(id);
     return { success: true };
   }
 

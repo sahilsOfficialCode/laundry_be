@@ -9,13 +9,25 @@ export class ClothType {
   name: string;
 
   @Prop({ required: true })
-  rate: number;
+  instantRate: number;
+
+  @Prop({ required: true })
+  scheduledRate: number;
+
+  @Prop({ required: false })
+  discountInstantRate?: number;
+
+  @Prop({ required: false })
+  discountScheduledRate?: number;
 
   @Prop({ required: false })
   description?: string;
 
   @Prop({ required: false })
   category?: string;
+
+  @Prop({ required: false })
+  subcategory?: string;
 
   @Prop({ required: true, default: true })
   isActive: boolean;

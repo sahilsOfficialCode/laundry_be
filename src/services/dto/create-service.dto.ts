@@ -21,6 +21,11 @@ export class CreateServiceDto {
   duration?: string;
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  turnaroundHours?: number;
+
+  @IsOptional()
   @IsString()
   imageUrl?: string;
 

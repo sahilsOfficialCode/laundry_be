@@ -36,6 +36,10 @@ import { WalletModule } from './wallet/wallet.module';
 
 import { ClothTypesModule } from './cloth-types/cloth-types.module';
 
+import { ReferralModule } from './referrals/referral.module';
+
+import { AccountDeletionModule } from './account-deletion/account-deletion.module';
+
 
 
 @Module({
@@ -85,6 +89,10 @@ import { ClothTypesModule } from './cloth-types/cloth-types.module';
     WalletModule,
 
     ClothTypesModule,
+
+    ReferralModule,
+
+    AccountDeletionModule,
 
   ],
 

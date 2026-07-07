@@ -27,7 +27,8 @@ import { ConsoleSmsProvider } from './sms/console-sms.provider';
 
         return {
           secret: jwtSecret,
-          signOptions: { expiresIn: '1h' },
+          // No global expiresIn: token lifetime is set per role at sign time
+          // in AuthService.buildAuthResponse (admin 24h, user/delivery ~3 months).
         };
       },
     }),
@@ -43,6 +44,6 @@ import { ConsoleSmsProvider } from './sms/console-sms.provider';
     },
   ],
   controllers: [AuthController],
-  exports: [AuthService, TokenBlacklistService]
+  exports: [AuthService, TokenBlacklistService, FirebaseAdminService]
 })
 export class AuthModule {}

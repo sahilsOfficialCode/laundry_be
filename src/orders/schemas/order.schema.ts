@@ -16,7 +16,9 @@ export enum OrderStatus {
 
   PROCESSING        = 'PROCESSING',         // step 4 – Clothes being cleaned
 
-  OUT_FOR_DELIVERY  = 'OUT_FOR_DELIVERY',   // step 5 – Delivered (awaiting OTP)
+  OUT_FOR_DELIVERY  = 'OUT_FOR_DELIVERY',   // step 5 – Delivered (awaiting OTP) — HOME_DELIVERY only
+
+  READY_FOR_PICKUP  = 'READY_FOR_PICKUP',   // step 5 – Ready for collection (awaiting OTP) — SELF_PICKUP only
 
   COMPLETED         = 'COMPLETED',          // step 5 – OTP confirmed
 
@@ -33,6 +35,17 @@ export enum PaymentStatus {
   COMPLETED = 'COMPLETED',
 
   FAILED = 'FAILED',
+
+}
+
+
+
+/** How the finished/clean order gets back to the customer. */
+export enum DeliveryType {
+
+  HOME_DELIVERY = 'HOME_DELIVERY',
+
+  SELF_PICKUP   = 'SELF_PICKUP',
 
 }
 
@@ -113,6 +126,54 @@ export class Order {
   @Prop()
 
   address?: string;
+
+
+
+  /** How the finished order gets back to the customer — chosen at checkout, editable until paid. */
+
+  @Prop({ enum: DeliveryType, default: DeliveryType.HOME_DELIVERY })
+
+  deliveryType: DeliveryType;
+
+
+
+  /**
+
+   * Return-delivery address — distinct from `address` (which is where the
+
+   * dirty laundry was collected from). Only set/used when deliveryType is
+
+   * HOME_DELIVERY; always freshly chosen by the customer from their saved
+
+   * addresses (never defaulted from the pickup address).
+
+   */
+
+  @Prop({ type: Object, required: false })
+
+  deliveryAddress?: {
+
+    houseNo?: string;
+
+    buildingName?: string;
+
+    street?: string;
+
+    area?: string;
+
+    landmark?: string;
+
+    city?: string;
+
+    state?: string;
+
+    pincode?: string;
+
+    lat?: number;
+
+    lng?: number;
+
+  };
 
 
 
@@ -248,6 +309,7 @@ export class Order {
         quantity: { type: Number, required: true },
         rate: { type: Number, required: true },
         amount: { type: Number, required: true },
+        serviceType: { type: String, required: false },
       },
     ],
     default: [],
@@ -264,6 +326,8 @@ export class Order {
     rate: number;
 
     amount: number;
+
+    serviceType?: string;
 
   }[];
 

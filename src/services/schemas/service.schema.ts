@@ -23,6 +23,10 @@ export class LaundryService {
   @Prop({ required: false })
   duration?: string;
 
+  /** Hours between pickup and delivery for scheduled orders of this service (e.g. 24, 48). Defaults to 24 when unset. */
+  @Prop({ required: false, default: 24, min: 1 })
+  turnaroundHours?: number;
+
   @Prop({ required: false })
   imageUrl?: string;
 
