@@ -1,6 +1,13 @@
-import { IsNumber, IsOptional, IsString, IsBoolean, IsIn, Min } from 'class-validator';
+import { IsArray, IsNumber, IsOptional, IsString, IsBoolean, IsIn, Min } from 'class-validator';
 
-export const CLOTH_TYPE_CATEGORIES = ['ironing', 'shoeCleaning', 'dryCleaning'] as const;
+export const CLOTH_TYPE_CATEGORIES = [
+  'ironing',
+  'shoeCleaning',
+  'dryCleaning',
+  'washFold',
+  'washIron',
+  'membership',
+] as const;
 export const CLOTH_TYPE_SUBCATEGORIES = [
   'unisex',
   'men',
@@ -8,6 +15,11 @@ export const CLOTH_TYPE_SUBCATEGORIES = [
   'kids',
   'household',
   'delicate',
+  'package',
+  'plan',
+  'ironPass',
+  'smartPass',
+  'combo',
 ] as const;
 
 export class CreateClothTypeDto {
@@ -47,4 +59,19 @@ export class CreateClothTypeDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  includes?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  excludedItems?: string[];
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  validityDays?: number;
 }

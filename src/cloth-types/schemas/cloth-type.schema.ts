@@ -31,6 +31,15 @@ export class ClothType {
 
   @Prop({ required: true, default: true })
   isActive: boolean;
+
+  @Prop({ type: [String], required: false })
+  includes?: string[];
+
+  @Prop({ type: [String], required: false })
+  excludedItems?: string[];
+
+  @Prop({ required: false })
+  validityDays?: number;
 }
 
 export const ClothTypeSchema = SchemaFactory.createForClass(ClothType);
