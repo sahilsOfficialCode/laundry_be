@@ -26,8 +26,8 @@ export const INSTANT_SLOT = {
   endTime: null,
   type: SlotType.BOTH,
   isInstant: true,
-  expectedTurnaround: '~10 min',
-  description: 'Delivery partner reaches you in ~10 minutes',
+  expectedTurnaround: '~15 min',
+  description: 'Delivery partner reaches you in ~15 minutes',
 };
 
 /**
