@@ -211,7 +211,7 @@ export class Order {
 
 
 
-  @Prop()
+  @Prop({ index: true })
 
   razorpayOrderId?: string;
 
@@ -225,9 +225,25 @@ export class Order {
 
 
 
-  @Prop()
+  @Prop({ index: true })
 
   razorpayPaymentId?: string;
+
+
+
+  /** Set by reconciliation/webhook when payment state can't be resolved automatically — surface in admin for manual follow-up. */
+
+  @Prop({ default: false })
+
+  needsManualReview?: boolean;
+
+
+
+  /** Why needsManualReview was set — e.g. amount mismatch, duplicate capture, unresolved after reconciliation window. */
+
+  @Prop({ required: false })
+
+  needsManualReviewReason?: string;
 
 
 
@@ -484,6 +500,18 @@ export class Order {
   })
 
   statusHistory: { status: string; timestamp: Date }[];
+
+
+
+  // Not @Prop-decorated — these already exist on every document courtesy of
+
+  // `@Schema({ timestamps: true })` above; declaring them here just gives
+
+  // TypeScript visibility into fields Mongoose already populates at runtime.
+
+  createdAt?: Date;
+
+  updatedAt?: Date;
 
 }
 

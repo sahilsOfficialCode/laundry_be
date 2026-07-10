@@ -4,6 +4,8 @@ import { APP_GUARD } from '@nestjs/core';
 
 import { ConfigModule, ConfigService } from '@nestjs/config';
 
+import { ScheduleModule } from '@nestjs/schedule';
+
 import { MongooseModule } from '@nestjs/mongoose';
 
 import { UsersModule } from './users/users.module';
@@ -13,6 +15,8 @@ import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 
 import { LoggerMiddleware } from './logger.middleware';
+
+import { RequestContextMiddleware } from './request-context.middleware';
 
 import { ServicesModule } from './services/services.module';
 
@@ -55,6 +59,8 @@ import { AppController } from './app.controller';
       isGlobal: true,
 
     }),
+
+    ScheduleModule.forRoot(),
 
     MongooseModule.forRootAsync({
 
@@ -122,7 +128,7 @@ export class AppModule implements NestModule {
 
   configure(consumer: MiddlewareConsumer) {
 
-    consumer.apply(LoggerMiddleware).forRoutes('*');
+    consumer.apply(RequestContextMiddleware, LoggerMiddleware).forRoutes('*');
 
   }
 

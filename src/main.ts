@@ -1,11 +1,16 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody:true makes Nest additionally stash the raw request bytes on
+  // req.rawBody for every route, without changing how req.body is parsed
+  // anywhere else — needed so the Razorpay webhook can verify its HMAC
+  // signature against the exact bytes Razorpay signed, not a re-serialized copy.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
   app.use(morgan('combined'));
   
   app.enableCors({
