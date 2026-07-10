@@ -42,6 +42,8 @@ import { AccountDeletionModule } from './account-deletion/account-deletion.modul
 
 import { CouponsModule } from './coupons/coupons.module';
 
+import { AppController } from './app.controller';
+
 
 
 @Module({
@@ -99,6 +101,8 @@ import { CouponsModule } from './coupons/coupons.module';
     CouponsModule,
 
   ],
+
+  controllers: [AppController],
 
   providers: [
 
