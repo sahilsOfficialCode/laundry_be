@@ -5,7 +5,11 @@ export type ClothTypeDocument = ClothType & Document;
 
 @Schema({ timestamps: true })
 export class ClothType {
-  @Prop({ required: true, unique: true })
+  // Not globally unique: the same garment name legitimately recurs across
+  // different services (e.g. "Shirt" under both Ironing and Dry Cleaning).
+  // Uniqueness is instead enforced per (name, category, subcategory) in
+  // ClothTypesService, since that's the actual identity of a cloth type.
+  @Prop({ required: true })
   name: string;
 
   @Prop({ required: true })
