@@ -40,6 +40,8 @@ import { ReferralModule } from './referrals/referral.module';
 
 import { AccountDeletionModule } from './account-deletion/account-deletion.module';
 
+import { CouponsModule } from './coupons/coupons.module';
+
 
 
 @Module({
@@ -93,6 +95,8 @@ import { AccountDeletionModule } from './account-deletion/account-deletion.modul
     ReferralModule,
 
     AccountDeletionModule,
+
+    CouponsModule,
 
   ],
 
