@@ -18,6 +18,10 @@ export class ReferralSettings {
   @Prop({ default: true })
   referralEnabled: boolean;
 
+  /** Length of newly generated referral codes (existing codes are unaffected). */
+  @Prop({ default: 7, min: 4, max: 12 })
+  codeLength: number;
+
   // ── Reward configuration ───────────────────────────────────────────────────
   @Prop({ type: String, enum: RewardType, default: RewardType.WALLET_CREDIT })
   rewardType: RewardType;

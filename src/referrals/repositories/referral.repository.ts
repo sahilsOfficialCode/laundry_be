@@ -14,7 +14,11 @@ import {
   ReferralLogDocument,
 } from '../schemas/referral-log.schema';
 import { FraudLog, FraudLogDocument } from '../schemas/fraud-log.schema';
-import { ReferralLogAction, ReferralStatus } from '../enums/referral.enums';
+import {
+  ReferralLogAction,
+  ReferralStatus,
+  RewardStatus,
+} from '../enums/referral.enums';
 
 /**
  * Data-access layer for the referral domain. Services depend on this
@@ -128,6 +132,20 @@ export class ReferralRepository {
 
   updateReward(id: string, update: Partial<ReferralReward>) {
     return this.rewardModel.findByIdAndUpdate(id, update, { new: true });
+  }
+
+  /**
+   * Atomically transition a reward from `from` status, applying `update`.
+   * Returns the updated document, or null if the reward was NOT in `from`
+   * (i.e. another concurrent caller already claimed it). This is the
+   * double-credit guard: only one caller can win the PENDING → RELEASED flip.
+   */
+  claimReward(id: string, from: RewardStatus, update: Record<string, any>) {
+    return this.rewardModel.findOneAndUpdate(
+      { _id: id, status: from },
+      { $set: update },
+      { new: true },
+    );
   }
 
   aggregateRewards(pipeline: any[]) {

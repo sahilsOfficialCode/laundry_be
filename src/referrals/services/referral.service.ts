@@ -54,20 +54,29 @@ export class ReferralService {
 
   /**
    * Generate a guaranteed-unique referral code. Retries on the (rare) collision.
-   * Returns the code; the caller stores it on the user document.
+   * Length comes from admin settings (codeLength) — no code change needed to
+   * alter it. Returns the code; the caller stores it on the user document.
    */
   async generateUniqueCode(): Promise<string> {
+    const settings = await this.settingsService.get();
+    const length = settings.codeLength ?? 7;
     for (let attempt = 0; attempt < 6; attempt++) {
-      const code = generateReferralCode();
+      const code = generateReferralCode(length);
       const exists = await this.userModel.exists({ referralCode: code });
       if (!exists) return code;
     }
-    // Extremely unlikely — widen the space by adding a char.
-    return generateReferralCode(9);
+    // Extremely unlikely — widen the space by adding chars.
+    return generateReferralCode(length + 2);
   }
 
   buildReferralLink(code: string): string {
     return `${LINK_BASE}?ref=${encodeURIComponent(code)}`;
+  }
+
+  /** True when this user has already been referred (bound to a code). */
+  async hasReferrer(userId: string): Promise<boolean> {
+    const existing = await this.repo.findReferralByReferee(userId);
+    return Boolean(existing);
   }
 
   // ── GET /referral/my ───────────────────────────────────────────────────────
@@ -235,23 +244,34 @@ export class ReferralService {
     await this.assertWithinLimits(referrerId, settings);
 
     // Create the referral. If fraud fired, store it REJECTED with the reasons.
-    const referral = await this.repo.createReferral({
-      referrerId,
-      refereeId,
-      code,
-      status: fraud.blocked ? ReferralStatus.REJECTED : ReferralStatus.REGISTERED,
-      registeredAt: new Date(),
-      expiresAt: new Date(
-        Date.now() + settings.referralExpiryDays * 86_400_000,
-      ),
-      deviceId: dto.deviceId,
-      ipAddress: requestCtx.ipAddress,
-      fraudSuspected: fraud.blocked,
-      fraudReasons: fraud.reasons,
-      rejectedReason: fraud.blocked
-        ? `Auto-rejected: ${fraud.reasons.join(', ')}`
-        : undefined,
-    });
+    // The unique index on refereeId is the last line of defence against two
+    // concurrent apply calls: the loser gets E11000, which we surface as the
+    // same "already used" conflict the earlier check produces.
+    let referral;
+    try {
+      referral = await this.repo.createReferral({
+        referrerId,
+        refereeId,
+        code,
+        status: fraud.blocked ? ReferralStatus.REJECTED : ReferralStatus.REGISTERED,
+        registeredAt: new Date(),
+        expiresAt: new Date(
+          Date.now() + settings.referralExpiryDays * 86_400_000,
+        ),
+        deviceId: dto.deviceId,
+        ipAddress: requestCtx.ipAddress,
+        fraudSuspected: fraud.blocked,
+        fraudReasons: fraud.reasons,
+        rejectedReason: fraud.blocked
+          ? `Auto-rejected: ${fraud.reasons.join(', ')}`
+          : undefined,
+      });
+    } catch (e: any) {
+      if (e?.code === 11000) {
+        throw new ConflictException('You have already used a referral code');
+      }
+      throw e;
+    }
 
     await this.repo.writeLog(ReferralLogAction.APPLIED, {
       referralId: String(referral._id),

@@ -192,6 +192,25 @@ export class UsersService {
   }
 
   /**
+   * Lightweight batch lookup used to attach customer name/phone to admin-facing
+   * lists (e.g. orders) without a full user document fetch per row.
+   */
+  async findNamesByIds(ids: string[]): Promise<Map<string, { name: string; mobileNumber?: string }>> {
+    const uniqueIds = [...new Set(ids)].filter(Boolean);
+    const map = new Map<string, { name: string; mobileNumber?: string }>();
+    if (uniqueIds.length === 0) return map;
+
+    const users = await this.userModel
+      .find({ _id: { $in: uniqueIds } })
+      .select('name mobileNumber');
+
+    for (const u of users) {
+      map.set(String(u._id), { name: u.name, mobileNumber: u.mobileNumber });
+    }
+    return map;
+  }
+
+  /**
    * Lightweight status lookup used by JwtAuthGuard on each request to enforce
    * account deletion / "logout from every device". Returns only the few fields
    * needed so it stays cheap (indexed _id lookup, lean).

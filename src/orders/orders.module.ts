@@ -23,6 +23,7 @@ import { SupportModule } from '../support/support.module';
 import { UploadModule } from '../upload/upload.module';
 import { ClothTypesModule } from '../cloth-types/cloth-types.module';
 import { ReferralModule } from '../referrals/referral.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { ReferralModule } from '../referrals/referral.module';
     UploadModule,
     ClothTypesModule,
     ReferralModule,
+    UsersModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService],
