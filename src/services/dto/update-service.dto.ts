@@ -1,6 +1,7 @@
 import {
   IsString,
   IsNumber,
+  IsNotEmpty,
   IsOptional,
   IsBoolean,
   IsArray,
@@ -22,7 +23,23 @@ export class UpdateServiceDto {
 
   @IsOptional()
   @IsString()
-  description?: string;
+  @IsNotEmpty()
+  instantDescription?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  scheduledDescription?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  instantOrderPlacedMessage?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  scheduledOrderPlacedMessage?: string;
 
   @IsOptional()
   @IsArray()

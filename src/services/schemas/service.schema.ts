@@ -14,8 +14,21 @@ export class LaundryService {
   @Prop({ required: true })
   price!: number;
 
+  /** Shown to customers browsing/booking this service via the Instant (same-day) flow. */
   @Prop({ required: true })
-  description!: string;
+  instantDescription!: string;
+
+  /** Shown to customers browsing/booking this service via the Scheduled (time-slot) flow. */
+  @Prop({ required: true })
+  scheduledDescription!: string;
+
+  /** Admin-authored message shown on the Order Placed screen for Instant bookings. */
+  @Prop({ required: true })
+  instantOrderPlacedMessage!: string;
+
+  /** Admin-authored message shown on the Order Placed screen for Scheduled bookings. */
+  @Prop({ required: true })
+  scheduledOrderPlacedMessage!: string;
 
   @Prop({ type: [String], default: [] })
   categories?: string[];
