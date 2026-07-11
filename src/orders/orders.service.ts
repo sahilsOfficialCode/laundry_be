@@ -54,6 +54,8 @@ import { ClothTypesService } from '../cloth-types/cloth-types.service';
 
 import { ReferralService } from '../referrals/services/referral.service';
 
+import { UsersService } from '../users/users.service';
+
 
 
 export type OrderPhotoType = 'damage' | 'weighing';
@@ -109,6 +111,8 @@ export class OrdersService {
     private readonly clothTypesService: ClothTypesService,
 
     private readonly referralService: ReferralService,
+
+    private readonly usersService: UsersService,
 
   ) {}
 
@@ -755,7 +759,7 @@ export class OrdersService {
 
 
 
-    const [data, total] = await Promise.all([
+    const [orders, total] = await Promise.all([
 
       this.orderModel.find(filter).sort(sortObj).skip(skip).limit(limit),
 
@@ -765,7 +769,35 @@ export class OrdersService {
 
 
 
+    const data = await this.attachCustomerInfo(orders);
+
+
+
     return { data, total, page, limit };
+
+  }
+
+
+
+  /** Attaches customerName/customerPhone (looked up from Users) to order docs for admin display/printing. */
+
+  private async attachCustomerInfo(orders: OrderDocument[]) {
+
+    const userMap = await this.usersService.findNamesByIds(orders.map((o) => o.userId));
+
+    return orders.map((o) => {
+
+      const plain: any = o.toObject ? o.toObject() : o;
+
+      const info = userMap.get(String(o.userId));
+
+      plain.customerName = info?.name;
+
+      plain.customerPhone = info?.mobileNumber;
+
+      return plain;
+
+    });
 
   }
 
@@ -793,7 +825,9 @@ export class OrdersService {
 
     if (!order) throw new NotFoundException('Order not found');
 
-    return order;
+    const [withInfo] = await this.attachCustomerInfo([order]);
+
+    return withInfo;
 
   }
 
@@ -1348,7 +1382,34 @@ export class OrdersService {
 
     ];
 
-    return order.save();
+    const saved = await order.save();
+
+
+
+    // ── Refer & Earn milestone hook (non-blocking) ────────────────────────
+    // Same trigger as the admin path in updateStatus() — must fire here too,
+    // since customers can also confirm delivery themselves via OTP.
+    this.referralService
+
+      .handleQualifyingOrder(saved.userId.toString(), {
+
+        _id: saved._id,
+
+        status: saved.status,
+
+        paymentStatus: (saved as any).paymentStatus,
+
+        billAmount: saved.billAmount,
+
+        totalAmount: saved.totalAmount,
+
+      })
+
+      .catch(() => { /* swallow — referral processing is best-effort */ });
+
+
+
+    return saved;
 
   }
 
@@ -1473,6 +1534,30 @@ export class OrdersService {
       )
 
       .catch(() => { /* swallow */ });
+
+
+
+    // ── Refer & Earn milestone hook (non-blocking) ────────────────────────
+    // Same trigger as the admin path in updateStatus() — must fire here too,
+    // since delivery partners completing the handover is the normal
+    // real-world way orders reach COMPLETED, not the admin panel.
+    this.referralService
+
+      .handleQualifyingOrder(updated.userId.toString(), {
+
+        _id: updated._id,
+
+        status: updated.status,
+
+        paymentStatus: (updated as any).paymentStatus,
+
+        billAmount: updated.billAmount,
+
+        totalAmount: updated.totalAmount,
+
+      })
+
+      .catch(() => { /* swallow — referral processing is best-effort */ });
 
 
 

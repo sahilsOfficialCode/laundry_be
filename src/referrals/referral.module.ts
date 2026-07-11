@@ -22,6 +22,11 @@ import {
 } from './schemas/referral-settings.schema';
 import { ReferralLog, ReferralLogSchema } from './schemas/referral-log.schema';
 import { FraudLog, FraudLogSchema } from './schemas/fraud-log.schema';
+import {
+  ReferralRateLimit,
+  ReferralRateLimitSchema,
+} from './schemas/referral-rate-limit.schema';
+import { ReferralThrottleGuard } from './guards/referral-throttle.guard';
 
 import { User, UserSchema } from '../users/schemas/user.schema';
 import {
@@ -47,6 +52,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
       { name: ReferralSettings.name, schema: ReferralSettingsSchema },
       { name: ReferralLog.name, schema: ReferralLogSchema },
       { name: FraudLog.name, schema: FraudLogSchema },
+      { name: ReferralRateLimit.name, schema: ReferralRateLimitSchema },
       { name: User.name, schema: UserSchema },
       { name: WalletTransaction.name, schema: WalletTransactionSchema },
     ]),
@@ -61,6 +67,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     ReferralRewardService,
     FraudDetectionService,
     ReferralAnalyticsService,
+    ReferralThrottleGuard,
   ],
   exports: [ReferralService, ReferralRewardService],
 })

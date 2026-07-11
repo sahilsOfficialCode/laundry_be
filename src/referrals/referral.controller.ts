@@ -7,6 +7,7 @@ import {
   Post,
   Query,
   Req,
+  UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { ReferralService } from './services/referral.service';
@@ -14,6 +15,10 @@ import { ReferralSettingsService } from './services/referral-settings.service';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { ApplyReferralDto, ValidateReferralDto } from './dto/apply-referral.dto';
 import { HistoryQueryDto } from './dto/history-query.dto';
+import {
+  ReferralThrottle,
+  ReferralThrottleGuard,
+} from './guards/referral-throttle.guard';
 
 /**
  * User-facing referral endpoints. All routes are protected by the global
@@ -26,16 +31,26 @@ export class ReferralController {
     private readonly settingsService: ReferralSettingsService,
   ) {}
 
-  /** POST /referral/validate — check a code before applying it. */
+  /**
+   * POST /referral/validate — check a code before applying it.
+   * Rate limited (10 attempts / 10 min per user) to block code enumeration.
+   */
   @Post('validate')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(ReferralThrottleGuard)
+  @ReferralThrottle({ limit: 10, windowMs: 600_000 })
   validate(@GetUser() user: any, @Body() dto: ValidateReferralDto) {
     return this.referralService.validateCode(dto.code, user.sub);
   }
 
-  /** POST /referral/apply — apply a referral code during onboarding. */
+  /**
+   * POST /referral/apply — apply a referral code during onboarding.
+   * Rate limited (5 attempts / hour per user) against brute force.
+   */
   @Post('apply')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(ReferralThrottleGuard)
+  @ReferralThrottle({ limit: 5, windowMs: 3_600_000 })
   apply(
     @GetUser() user: any,
     @Body() dto: ApplyReferralDto,
@@ -61,13 +76,15 @@ export class ReferralController {
   /** GET /referral/dashboard — combined "Refer & Earn" home payload. */
   @Get('dashboard')
   async dashboard(@GetUser() user: any) {
-    const [my, history, settings] = await Promise.all([
+    const [my, history, settings, hasReferrer] = await Promise.all([
       this.referralService.getMyReferral(user.sub),
       this.referralService.getHistory(user.sub, 1, 5),
       this.settingsService.get(),
+      this.referralService.hasReferrer(user.sub),
     ]);
     return {
       ...my,
+      hasReferrer,
       recent: history.data,
       program: {
         enabled: settings.referralEnabled,

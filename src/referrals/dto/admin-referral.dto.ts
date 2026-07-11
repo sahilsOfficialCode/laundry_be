@@ -17,6 +17,8 @@ import { RewardType } from '../enums/referral.enums';
 export class UpdateReferralSettingsDto {
   @IsOptional() @IsBoolean() referralEnabled?: boolean;
 
+  @IsOptional() @IsInt() @Min(4) @Max(12) codeLength?: number;
+
   @IsOptional() @IsEnum(RewardType) rewardType?: RewardType;
 
   @IsOptional() @IsNumber() @Min(0) referrerRewardAmount?: number;
