@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import {
   WalletTransaction,
   WalletTransactionDocument,
+  WalletTxnCategory,
   WalletTxnType,
   WalletTxnStatus,
 } from './schemas/wallet-transaction.schema';
@@ -78,6 +79,8 @@ export class WalletService {
       amount,
       description: `Wallet top-up of ₹${amount}`,
       status: WalletTxnStatus.PENDING,
+      category: WalletTxnCategory.TOPUP,
+      createdBy: 'USER',
     });
 
     // Create a Razorpay order; use wallet_<txnId> as receipt.
@@ -124,15 +127,42 @@ export class WalletService {
       throw new BadRequestException('Invalid payment signature');
     }
 
-    // Mark transaction completed and credit the wallet atomically.
-    txn.status = WalletTxnStatus.COMPLETED;
-    txn.razorpayPaymentId = razorpayPaymentId;
-    await txn.save();
+    // Atomically claim the transaction (PENDING → COMPLETED). If a concurrent
+    // verify call already claimed it, DO NOT credit again — this is the
+    // replay/double-verify guard.
+    const claimed = await this.txnModel.findOneAndUpdate(
+      { _id: txn._id, status: WalletTxnStatus.PENDING },
+      {
+        $set: {
+          status: WalletTxnStatus.COMPLETED,
+          razorpayPaymentId,
+          category: WalletTxnCategory.TOPUP,
+          createdBy: 'USER',
+        },
+      },
+      { new: true },
+    );
+    if (!claimed) {
+      const user = await this.userModel.findById(userId).select('walletBalance').lean();
+      return { success: true, balance: user?.walletBalance ?? 0 };
+    }
 
     const updatedUser = await this.userModel.findByIdAndUpdate(
       userId,
       { $inc: { walletBalance: txn.amount } },
       { new: true, select: 'walletBalance' },
+    );
+
+    // Record the ledger balances on the transaction (best-effort audit fields).
+    const closing = updatedUser?.walletBalance ?? txn.amount;
+    await this.txnModel.updateOne(
+      { _id: txn._id },
+      {
+        $set: {
+          openingBalance: Math.round((closing - txn.amount) * 100) / 100,
+          closingBalance: closing,
+        },
+      },
     );
 
     return {
@@ -166,41 +196,64 @@ export class WalletService {
       throw new BadRequestException('Payment is available once your order is itemized and the bill is confirmed');
     }
 
-    const user = await this.userModel.findById(userId).select('walletBalance');
-    if (!user) throw new BadRequestException('User not found');
-
-    const balance = user.walletBalance ?? 0;
-    if (balance < order.billAmount) {
+    // Atomically deduct the wallet balance ONLY if it still covers the bill.
+    // The $gte filter closes the check-then-act race: two concurrent pay calls
+    // cannot both pass a stale balance check.
+    const billAmount = order.billAmount;
+    const updatedUser = await this.userModel.findOneAndUpdate(
+      { _id: userId, walletBalance: { $gte: billAmount } },
+      { $inc: { walletBalance: -billAmount } },
+      { new: true, select: 'walletBalance' },
+    );
+    if (!updatedUser) {
+      const user = await this.userModel.findById(userId).select('walletBalance').lean();
+      const balance = user?.walletBalance ?? 0;
       throw new BadRequestException(
-        `Insufficient wallet balance. Available: ₹${balance.toFixed(2)}, Required: ₹${order.billAmount.toFixed(2)}.`,
+        `Insufficient wallet balance. Available: ₹${balance.toFixed(2)}, Required: ₹${billAmount.toFixed(2)}.`,
       );
     }
 
-    // Atomically deduct wallet balance.
-    const updatedUser = await this.userModel.findByIdAndUpdate(
-      userId,
-      { $inc: { walletBalance: -order.billAmount } },
-      { new: true, select: 'walletBalance' },
+    // Atomically claim the order's payment (PENDING → COMPLETED) and generate
+    // the delivery OTP — mirrors payments.controller.ts's verifyPayment
+    // (Razorpay) flow, so the dispatch gate (which checks deliveryOtp) passes.
+    // If a concurrent request already paid this order, refund the deduction.
+    const deliveryOtp = String(Math.floor(1000 + Math.random() * 9000));
+    const claimedOrder = await this.orderModel.findOneAndUpdate(
+      { _id: orderId, paymentStatus: PaymentStatus.PENDING },
+      {
+        paymentStatus: PaymentStatus.COMPLETED,
+        paymentMethod: 'wallet',
+        deliveryOtp,
+      },
     );
+    if (!claimedOrder) {
+      // Lost the race — order was paid by another request. Give the money back.
+      const reverted = await this.userModel.findByIdAndUpdate(
+        userId,
+        { $inc: { walletBalance: billAmount } },
+        { new: true, select: 'walletBalance' },
+      );
+      return {
+        success: true,
+        alreadyPaid: true,
+        newBalance: reverted?.walletBalance ?? 0,
+      };
+    }
 
     // Create a COMPLETED debit transaction linked to this order.
+    const closing = updatedUser.walletBalance ?? 0;
     await this.txnModel.create({
       userId,
       type: WalletTxnType.DEBIT,
-      amount: order.billAmount,
+      amount: billAmount,
       description: `Payment for order #${order.orderNumber ?? String(order._id).slice(-6).toUpperCase()}`,
       status: WalletTxnStatus.COMPLETED,
       referenceOrderId: String(order._id),
-    });
-
-    // Mark order payment as completed and generate the delivery OTP —
-    // mirrors payments.controller.ts's verifyPayment (Razorpay) flow, so the
-    // dispatch/ready-for-pickup gate (which checks order.deliveryOtp) passes.
-    const deliveryOtp = String(Math.floor(1000 + Math.random() * 9000));
-    await this.orderModel.findByIdAndUpdate(orderId, {
-      paymentStatus: PaymentStatus.COMPLETED,
-      paymentMethod: 'wallet',
-      deliveryOtp,
+      referenceId: String(order._id),
+      category: WalletTxnCategory.PAYMENT,
+      openingBalance: Math.round((closing + billAmount) * 100) / 100,
+      closingBalance: closing,
+      createdBy: 'USER',
     });
 
     // Fire payment success push notification (non-blocking)
