@@ -388,6 +388,8 @@ export class OrdersService {
 
           turnaroundHours: service.turnaroundHours ?? 24,
 
+          instantTurnaroundMinutes: service.instantTurnaroundMinutes ?? 90,
+
         };
 
       }),
@@ -457,12 +459,18 @@ export class OrdersService {
     // next). Turnaround is per-service (see LaundryService.turnaroundHours,
     // default 24) — an order mixing services uses the longest one, since the
     // whole order is delivered together.
-    // Instant orders: same-day delivery, slot from the checkout context.
+    // Instant orders: delivery is the pickup moment shifted forward by the
+    // order's instant turnaround (see LaundryService.instantTurnaroundMinutes,
+    // default 90) — same longest-wins rule when an order mixes services.
     const scheduledItems = orderItems.filter((i) => i.category === 'scheduled');
+    const instantItems = orderItems.filter((i) => i.category === 'instant');
     const isScheduledOrder = scheduledItems.length > 0;
     const turnaroundHours = isScheduledOrder
       ? Math.max(...scheduledItems.map((i) => i.turnaroundHours ?? 24))
       : 24;
+    const instantTurnaroundMinutes = instantItems.length > 0
+      ? Math.max(...instantItems.map((i) => i.instantTurnaroundMinutes ?? 90))
+      : 90;
     let deliverySlot = checkoutContext.deliverySlot;
     let deliveryDate: Date | undefined = resolvedPickupDate;
     if (isScheduledOrder && checkoutContext.pickupSlot) {
@@ -472,6 +480,10 @@ export class OrdersService {
           resolvedPickupDate.getTime() + turnaroundHours * 60 * 60 * 1000,
         );
       }
+    } else if (!isScheduledOrder && resolvedPickupDate) {
+      deliveryDate = new Date(
+        resolvedPickupDate.getTime() + instantTurnaroundMinutes * 60 * 1000,
+      );
     }
 
     // ── Return-delivery choice ────────────────────────────────────────────────
