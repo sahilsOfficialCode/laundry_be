@@ -27,6 +27,10 @@ class CartItem {
   /** Snapshot of the service's turnaround hours at add-time (see LaundryService.turnaroundHours). */
   @Prop({ required: false, default: 24 })
   turnaroundHoursSnapshot?: number;
+
+  /** Snapshot of the service's instant turnaround minutes at add-time (see LaundryService.instantTurnaroundMinutes). */
+  @Prop({ required: false, default: 90 })
+  instantTurnaroundMinutesSnapshot?: number;
 }
 
 @Schema({ timestamps: true })

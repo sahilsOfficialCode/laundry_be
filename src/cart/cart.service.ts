@@ -75,6 +75,7 @@ export class CartService {
         subtotal: service.price * quantity,
         category,
         turnaroundHoursSnapshot: service.turnaroundHours ?? 24,
+        instantTurnaroundMinutesSnapshot: service.instantTurnaroundMinutes ?? 90,
       });
     }
 

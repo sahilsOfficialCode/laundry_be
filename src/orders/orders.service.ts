@@ -388,6 +388,8 @@ export class OrdersService {
 
           turnaroundHours: service.turnaroundHours ?? 24,
 
+          instantTurnaroundMinutes: service.instantTurnaroundMinutes ?? 90,
+
         };
 
       }),
@@ -444,26 +446,46 @@ export class OrdersService {
 
 
 
-    // Resolve pickup date once — reused for the delivery schedule below.
-    const resolvedPickupDate = checkoutContext.pickupDate
-      ? new Date(checkoutContext.pickupDate)
-      : assignedLocation
-        ? new Date()
-        : undefined;
-
     // ── Delivery schedule ────────────────────────────────────────────────────
     // Scheduled orders: delivery is the same slot the user picked, but shifted
     // forward by the order's turnaround (e.g. 24h → next day, 48h → day after
     // next). Turnaround is per-service (see LaundryService.turnaroundHours,
     // default 24) — an order mixing services uses the longest one, since the
     // whole order is delivered together.
-    // Instant orders: same-day delivery, slot from the checkout context.
+    // Instant orders: delivery is the pickup moment shifted forward by the
+    // order's instant turnaround (see LaundryService.instantTurnaroundMinutes,
+    // default 90) — same longest-wins rule when an order mixes services.
     const scheduledItems = orderItems.filter((i) => i.category === 'scheduled');
+    const instantItems = orderItems.filter((i) => i.category === 'instant');
     const isScheduledOrder = scheduledItems.length > 0;
+
+    // Scheduled orders anchor to the date the user picked. Instant orders have
+    // no real "pickup date" to pick — they're anchored to the actual moment of
+    // placement, so the client-sent date (which carries no time-of-day) is
+    // ignored; using it would compute a delivery ETA around midnight instead
+    // of relative to now, which can land before the order was even placed.
+    const resolvedPickupDate = isScheduledOrder
+      ? checkoutContext.pickupDate
+        ? new Date(checkoutContext.pickupDate)
+        : assignedLocation
+          ? new Date()
+          : undefined
+      : assignedLocation
+        ? new Date()
+        : undefined;
+
     const turnaroundHours = isScheduledOrder
       ? Math.max(...scheduledItems.map((i) => i.turnaroundHours ?? 24))
       : 24;
-    let deliverySlot = checkoutContext.deliverySlot;
+    const instantTurnaroundMinutes = instantItems.length > 0
+      ? Math.max(...instantItems.map((i) => i.instantTurnaroundMinutes ?? 90))
+      : 90;
+
+    // Scheduled orders keep a slot label (same slot the user picked, shifted
+    // forward by turnaround). Instant orders have no real slot — any label the
+    // client sent is discarded so the FE shows the computed ETA instead of a
+    // delivery-slot string that has no relationship to the actual time.
+    let deliverySlot: string | undefined;
     let deliveryDate: Date | undefined = resolvedPickupDate;
     if (isScheduledOrder && checkoutContext.pickupSlot) {
       deliverySlot = checkoutContext.pickupSlot;
@@ -472,6 +494,10 @@ export class OrdersService {
           resolvedPickupDate.getTime() + turnaroundHours * 60 * 60 * 1000,
         );
       }
+    } else if (!isScheduledOrder && resolvedPickupDate) {
+      deliveryDate = new Date(
+        resolvedPickupDate.getTime() + instantTurnaroundMinutes * 60 * 1000,
+      );
     }
 
     // ── Return-delivery choice ────────────────────────────────────────────────
