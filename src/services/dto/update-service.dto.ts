@@ -48,12 +48,21 @@ export class UpdateServiceDto {
 
   @IsOptional()
   @IsString()
-  duration?: string;
+  instantDuration?: string;
+
+  @IsOptional()
+  @IsString()
+  scheduledDuration?: string;
 
   @IsOptional()
   @IsInt()
   @Min(1)
   turnaroundHours?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  instantTurnaroundMinutes?: number;
 
   @IsOptional()
   @IsString()
