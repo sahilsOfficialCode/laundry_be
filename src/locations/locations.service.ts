@@ -52,6 +52,10 @@ import {
   startOfDay,
   toDayOfWeek,
 } from './utils/location-utils';
+import {
+  INSTANT_ORDER_UNAVAILABLE_MESSAGE,
+  isInstantAvailable,
+} from '../common/instant-availability';
 
 type RequestActor = {
   sub: string;
@@ -66,7 +70,8 @@ type LocationEligibilityReason =
   | 'SERVICE_NOT_AVAILABLE_IN_AREA'
   | 'NO_PICKUP_SLOTS_AVAILABLE'
   | 'NO_DELIVERY_SLOTS_AVAILABLE'
-  | 'DAILY_CAPACITY_REACHED';
+  | 'DAILY_CAPACITY_REACHED'
+  | 'INSTANT_ORDERS_UNAVAILABLE';
 
 export type LocationValidationMessage = {
   code: LocationEligibilityReason;
@@ -981,6 +986,19 @@ export class LocationsService implements OnModuleInit {
       reasons.push({
         code: 'SERVICE_NOT_AVAILABLE_IN_AREA',
         message: 'Service not available in your area',
+      });
+    }
+
+    // Instant orders stop being accepted after today's cutoff (see
+    // INSTANT_ORDER_CUTOFF_TIME / isInstantAvailable). Reject here so a stale
+    // client that already had Instant selected can't bypass the UI cutoff.
+    const requestedSlots = [payload.pickupSlot, payload.deliverySlot]
+      .filter((s): s is string => !!s)
+      .map((s) => s.trim().toLowerCase());
+    if (requestedSlots.includes('instant') && !isInstantAvailable()) {
+      reasons.push({
+        code: 'INSTANT_ORDERS_UNAVAILABLE',
+        message: INSTANT_ORDER_UNAVAILABLE_MESSAGE,
       });
     }
 
