@@ -1075,7 +1075,7 @@ export class OrdersService {
         .notifyAdmin({
           title: dto.status === OrderStatus.CANCELLED
             ? 'Order Cancelled ❌'
-            : isSelfPickup ? 'Order Picked Up ✅' : 'Order Delivered ✅',
+            : isSelfPickup ? 'Order Delivered ✅' : 'Order Delivered ✅',
           body: `Order #${updatedOrderNumber} was ${
             dto.status === OrderStatus.CANCELLED ? 'cancelled' : isSelfPickup ? 'picked up by the customer' : 'delivered'
           }.`,
