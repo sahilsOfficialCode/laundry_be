@@ -62,10 +62,21 @@ export class ReferralRewardService {
     return Math.round(amount * 100) / 100; // 2-dp
   }
 
-  /** Create PENDING reward records (referrer + optional referee) for a referral. */
+  /**
+   * Create PENDING reward records (referrer + optional referee) for a referral.
+   *
+   * `skipRefereeReward` — set when the referee already got their welcome bonus
+   * as an instant checkout-time discount on this same order (see
+   * OrdersService.resolveFirstOrderDiscount, which draws on the very same
+   * refereeRewardAmount/minimumOrderValue/maximumReferralReward settings).
+   * Without this the referee would be paid twice for one first order: once
+   * off the bill, once again into their wallet. The referrer's own reward is
+   * unaffected — they still earn it normally.
+   */
   async createPendingRewards(
     referral: Referral & { _id: any },
     settings: ReferralSettings,
+    opts: { skipRefereeReward?: boolean } = {},
   ): Promise<void> {
     const referralId = String(referral._id);
 
@@ -85,7 +96,7 @@ export class ReferralRewardService {
       });
     }
 
-    if (settings.refereeRewardAmount > 0) {
+    if (settings.refereeRewardAmount > 0 && !opts.skipRefereeReward) {
       await this.repo.createReward({
         referralId,
         beneficiaryId: referral.refereeId,
