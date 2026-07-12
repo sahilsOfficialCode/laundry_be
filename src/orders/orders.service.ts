@@ -1084,7 +1084,13 @@ export class OrdersService {
         .catch(() => { /* swallow — referral processing is best-effort */ });
     }
 
-    return updatedOrder;
+    // Attach customerName/customerPhone so the admin panel's cached copy of
+    // this order (Zustand store keyed by _id) isn't overwritten with a
+    // customer-less version the moment any status update happens — this is
+    // exactly what was wiping the name/phone off the bill/print view right
+    // after itemizing an order.
+    const [withInfo] = await this.attachCustomerInfo([updatedOrder]);
+    return withInfo;
 
   }
 
@@ -1226,7 +1232,11 @@ export class OrdersService {
 
 
 
-    return saved;
+    // Same reasoning as updateStatus() — the admin panel replaces its cached
+    // order with whatever this endpoint returns, so it must carry
+    // customerName/customerPhone too or the drawer/print view loses them.
+    const [withInfo] = await this.attachCustomerInfo([saved]);
+    return withInfo;
 
   }
 
@@ -1260,7 +1270,11 @@ export class OrdersService {
 
     }
 
-    return order.save();
+    const saved = await order.save();
+
+    const [withInfo] = await this.attachCustomerInfo([saved]);
+
+    return withInfo;
 
   }
 
