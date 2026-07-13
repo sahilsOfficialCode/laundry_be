@@ -334,6 +334,30 @@ export class Order {
 
 
 
+  /**
+   * Snapshot of billAmount before the first-order discount was subtracted.
+   * Only set when firstOrderDiscountAmount > 0 — lets the UI show a strike-
+   * through original price alongside the discounted billAmount actually charged.
+   */
+
+  @Prop({ required: false })
+
+  originalBillAmount?: number;
+
+
+
+  /**
+   * Amount knocked off billAmount because this was the customer's first
+   * order (derived from the admin's referral settings — min. first order
+   * value, welcome bonus, max reward cap). 0/undefined when not applied.
+   */
+
+  @Prop({ required: false, default: 0 })
+
+  firstOrderDiscountAmount?: number;
+
+
+
   // ── Cloth-type breakdown for ITEMIZED workflow ────────────────────────────────
 
   @Prop({
