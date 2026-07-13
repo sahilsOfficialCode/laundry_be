@@ -49,6 +49,21 @@ export enum DeliveryType {
 
 }
 
+/**
+ * How the *dirty* laundry gets collected from the customer at booking time —
+ * independent of DeliveryType, which governs the return leg. Values mirror
+ * the Flutter app's CheckoutServiceType.apiValue strings exactly.
+ */
+export enum PickupType {
+
+  COLLECT_FROM_HOME = 'collect_from_home',
+
+  DROP_AT_SHOP       = 'drop_at_shop',
+
+  HOME_RECEPTION     = 'home_reception',
+
+}
+
 
 
 @Schema({ timestamps: true })
@@ -126,6 +141,10 @@ export class Order {
   @Prop()
 
   address?: string;
+
+  /** How the dirty laundry was collected — chosen at checkout, not editable afterward. */
+  @Prop({ enum: PickupType, required: false })
+  pickupType?: PickupType;
 
 
 

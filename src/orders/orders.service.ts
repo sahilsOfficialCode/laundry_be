@@ -566,6 +566,8 @@ export class OrdersService {
 
       address: checkoutContext.address,
 
+      pickupType: checkoutContext.serviceType,
+
       deliveryType,
 
       deliveryAddress:
@@ -812,6 +814,53 @@ export class OrdersService {
       plain.customerName = info?.name;
 
       plain.customerPhone = info?.mobileNumber;
+
+      return plain;
+
+    });
+
+  }
+
+  /**
+   * Best-available customer-facing address for a single order — prefers the
+   * structured return-delivery address (deliveryAddress), falling back to the
+   * plain pickup address string (address). Returns undefined if neither is
+   * set, rather than an empty string, so callers can distinguish "no address
+   * on file" from a genuinely blank value.
+   */
+  private formatOrderAddress(order: OrderDocument | any): string | undefined {
+    const d = order.deliveryAddress;
+    if (d) {
+      const line = [d.houseNo, d.buildingName, d.street, d.area, d.landmark, d.city, d.state, d.pincode]
+        .filter((part) => typeof part === 'string' && part.trim().length > 0)
+        .join(', ');
+      if (line) return line;
+    }
+    return order.address || undefined;
+  }
+
+  /**
+   * Attaches a minimal `customer` object ({ name, phone, address }) to each
+   * order for the delivery-partner view. Deliberately allowlists only these
+   * three fields from the User lookup — never spreads the full user document
+   * — so password/email/walletBalance/fcmTokens/etc. can never leak here even
+   * if `findNamesByIds` is later changed to select more fields.
+   */
+  private async attachCustomerContactForDelivery(orders: OrderDocument[]) {
+
+    const userMap = await this.usersService.findNamesByIds(orders.map((o) => o.userId));
+
+    return orders.map((o) => {
+
+      const plain: any = o.toObject ? o.toObject() : o;
+
+      const info = userMap.get(String(o.userId));
+
+      plain.customer = {
+        name: info?.name,
+        phone: info?.mobileNumber,
+        address: this.formatOrderAddress(o),
+      };
 
       return plain;
 
@@ -1479,7 +1528,13 @@ export class OrdersService {
 
     ]);
 
-    return { active, completed };
+    // Single batched user lookup for both lists to avoid an extra query.
+    const combined = await this.attachCustomerContactForDelivery([...active, ...completed]);
+
+    return {
+      active: combined.slice(0, active.length),
+      completed: combined.slice(active.length),
+    };
 
   }
 
