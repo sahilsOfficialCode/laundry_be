@@ -36,6 +36,11 @@ import {
 
 import { CheckoutContextDto } from './dto/checkout-context.dto';
 
+import {
+  INSTANT_ORDER_UNAVAILABLE_MESSAGE,
+  isInstantAvailable,
+} from '../common/instant-availability';
+
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 
 import { UpdateDeliveryDetailsDto } from './dto/update-delivery-details.dto';
@@ -433,6 +438,19 @@ export class OrdersService {
         'Please add services and try again.',
 
       );
+
+    }
+
+
+
+    // Instant orders stop being accepted after today's cutoff (see
+    // INSTANT_ORDER_CUTOFF_TIME / isInstantAvailable). Checked against the
+    // cart item category rather than checkoutContext.pickupSlot so this
+    // covers every serviceType (Drop at Shop included) — a stale/fallback
+    // slot label can't bypass it the way a slot-only check could.
+    if (orderItems.some((i) => i.category === 'instant') && !isInstantAvailable()) {
+
+      throw new BadRequestException(INSTANT_ORDER_UNAVAILABLE_MESSAGE);
 
     }
 
@@ -1057,7 +1075,7 @@ export class OrdersService {
         .notifyAdmin({
           title: dto.status === OrderStatus.CANCELLED
             ? 'Order Cancelled ❌'
-            : isSelfPickup ? 'Order Picked Up ✅' : 'Order Delivered ✅',
+            : isSelfPickup ? 'Order Delivered ✅' : 'Order Delivered ✅',
           body: `Order #${updatedOrderNumber} was ${
             dto.status === OrderStatus.CANCELLED ? 'cancelled' : isSelfPickup ? 'picked up by the customer' : 'delivered'
           }.`,

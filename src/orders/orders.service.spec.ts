@@ -12,6 +12,13 @@ import { SupportEventsService } from '../support/support-events.service';
 import { UploadService } from '../upload/upload.service';
 import { ClothTypesService } from '../cloth-types/cloth-types.service';
 import { ReferralService } from '../referrals/services/referral.service';
+import { UsersService } from '../users/users.service';
+import { isInstantAvailable } from '../common/instant-availability';
+
+jest.mock('../common/instant-availability', () => ({
+  ...jest.requireActual('../common/instant-availability'),
+  isInstantAvailable: jest.fn().mockReturnValue(true),
+}));
 
 describe('OrdersService', () => {
   let service: OrdersService;
@@ -37,6 +44,7 @@ describe('OrdersService', () => {
         { provide: UploadService, useValue: {} },
         { provide: ClothTypesService, useValue: {} },
         { provide: ReferralService, useValue: {} },
+        { provide: UsersService, useValue: {} },
       ],
     }).compile();
 
@@ -121,7 +129,11 @@ describe('OrdersService — checkout delivery-date computation', () => {
           provide: LocationsService,
           useValue: {
             countActiveLocations: jest.fn().mockResolvedValue(0),
-            validateBookingEligibility: jest.fn(),
+            // Instant orders derive deliveryDate from "now", which only gets
+            // computed when a location was actually assigned (see
+            // orders.service.ts's resolvedPickupDate) — resolve one so tests
+            // that pass pickup coordinates exercise that path.
+            validateBookingEligibility: jest.fn().mockResolvedValue({ _id: 'location-1' }),
           },
         },
         {
@@ -139,26 +151,39 @@ describe('OrdersService — checkout delivery-date computation', () => {
         { provide: UploadService, useValue: {} },
         { provide: ClothTypesService, useValue: {} },
         { provide: ReferralService, useValue: {} },
+        { provide: UsersService, useValue: {} },
       ],
     }).compile();
 
     return { service: module.get<OrdersService>(OrdersService), savedOrders };
   }
 
+  // Instant orders anchor deliveryDate to the actual moment of placement
+  // (see orders.service.ts's resolvedPickupDate), not the client-sent
+  // pickupDate, and only once a location has been assigned — so these tests
+  // pin "now" with fake timers and supply pickup coordinates to exercise
+  // that path deterministically.
   it('Instant order: deliveryDate = pickupDate + instantTurnaroundMinutes', async () => {
-    const { service } = await buildService({
-      category: 'instant',
-      instantTurnaroundMinutes: 90,
-    });
+    jest.useFakeTimers().setSystemTime(new Date(PICKUP_DATE));
+    try {
+      const { service } = await buildService({
+        category: 'instant',
+        instantTurnaroundMinutes: 90,
+      });
 
-    const order = await service.checkout('user-1', {
-      pickupDate: PICKUP_DATE,
-      pickupSlot: 'instant',
-      deliveryType: DeliveryType.SELF_PICKUP,
-    } as any);
+      const order = await service.checkout('user-1', {
+        pickupDate: PICKUP_DATE,
+        pickupSlot: 'instant',
+        pickupLatitude: 19.076,
+        pickupLongitude: 72.8777,
+        deliveryType: DeliveryType.SELF_PICKUP,
+      } as any);
 
-    const expected = new Date(PICKUP_DATE).getTime() + 90 * 60 * 1000;
-    expect(new Date(order.deliveryDate).getTime()).toBe(expected);
+      const expected = new Date(PICKUP_DATE).getTime() + 90 * 60 * 1000;
+      expect(new Date(order.deliveryDate).getTime()).toBe(expected);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('Scheduled order: deliveryDate = pickupDate + turnaroundHours', async () => {
@@ -178,16 +203,23 @@ describe('OrdersService — checkout delivery-date computation', () => {
   });
 
   it('Instant order defaults to 90 minutes when the service has no override', async () => {
-    const { service } = await buildService({ category: 'instant' });
+    jest.useFakeTimers().setSystemTime(new Date(PICKUP_DATE));
+    try {
+      const { service } = await buildService({ category: 'instant' });
 
-    const order = await service.checkout('user-1', {
-      pickupDate: PICKUP_DATE,
-      pickupSlot: 'instant',
-      deliveryType: DeliveryType.SELF_PICKUP,
-    } as any);
+      const order = await service.checkout('user-1', {
+        pickupDate: PICKUP_DATE,
+        pickupSlot: 'instant',
+        pickupLatitude: 19.076,
+        pickupLongitude: 72.8777,
+        deliveryType: DeliveryType.SELF_PICKUP,
+      } as any);
 
-    const expected = new Date(PICKUP_DATE).getTime() + 90 * 60 * 1000;
-    expect(new Date(order.deliveryDate).getTime()).toBe(expected);
+      const expected = new Date(PICKUP_DATE).getTime() + 90 * 60 * 1000;
+      expect(new Date(order.deliveryDate).getTime()).toBe(expected);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('Scheduled order defaults to 24 hours when the service has no override', async () => {
@@ -201,5 +233,68 @@ describe('OrdersService — checkout delivery-date computation', () => {
 
     const expected = new Date(PICKUP_DATE).getTime() + 24 * 60 * 60 * 1000;
     expect(new Date(order.deliveryDate).getTime()).toBe(expected);
+  });
+
+  describe('Instant cutoff at checkout', () => {
+    afterEach(() => {
+      (isInstantAvailable as jest.Mock).mockReturnValue(true);
+    });
+
+    it('rejects an Instant checkout after cutoff', async () => {
+      (isInstantAvailable as jest.Mock).mockReturnValue(false);
+      const { service } = await buildService({ category: 'instant' });
+
+      await expect(
+        service.checkout('user-1', {
+          pickupDate: PICKUP_DATE,
+          pickupSlot: 'instant',
+          deliveryType: DeliveryType.SELF_PICKUP,
+        } as any),
+      ).rejects.toThrow('Instant not available');
+    });
+
+    // Regression test: Drop at Shop (and any other flow where the client falls
+    // back to a non-"instant" slot label, e.g. because getAvailable() already
+    // omitted the Instant slot) must still be rejected. The check has to key
+    // off the cart's item category, not the slot label the client happens to
+    // send — see orders.service.ts's `orderItems.some(i => i.category === 'instant')`.
+    it('rejects an Instant cart after cutoff even when the client sends a non-"instant" slot label', async () => {
+      (isInstantAvailable as jest.Mock).mockReturnValue(false);
+      const { service } = await buildService({ category: 'instant' });
+
+      await expect(
+        service.checkout('user-1', {
+          pickupDate: PICKUP_DATE,
+          pickupSlot: 'Full Day', // stale-client / FE-fallback label, not 'instant'
+          deliveryType: DeliveryType.SELF_PICKUP,
+        } as any),
+      ).rejects.toThrow('Instant not available');
+    });
+
+    it('does not affect scheduled checkout after cutoff', async () => {
+      (isInstantAvailable as jest.Mock).mockReturnValue(false);
+      const { service } = await buildService({ category: 'scheduled' });
+
+      const order = await service.checkout('user-1', {
+        pickupDate: PICKUP_DATE,
+        pickupSlot: 'full day',
+        deliveryType: DeliveryType.SELF_PICKUP,
+      } as any);
+
+      expect(order).toBeDefined();
+    });
+
+    it('allows an Instant checkout before cutoff', async () => {
+      (isInstantAvailable as jest.Mock).mockReturnValue(true);
+      const { service } = await buildService({ category: 'instant' });
+
+      const order = await service.checkout('user-1', {
+        pickupDate: PICKUP_DATE,
+        pickupSlot: 'instant',
+        deliveryType: DeliveryType.SELF_PICKUP,
+      } as any);
+
+      expect(order).toBeDefined();
+    });
   });
 });

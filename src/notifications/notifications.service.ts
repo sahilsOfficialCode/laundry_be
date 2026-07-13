@@ -413,7 +413,7 @@ export class NotificationsService {
       // SELF_PICKUP-only status — no "on the way" notification is ever sent
       // for these orders; this is the equivalent milestone.
       READY_FOR_PICKUP: {
-        title: 'Ready for Pickup 🎉',
+        title: 'Ready for Delivery 🎉',
         body: `Your order #${orderNumber} is ready — come collect it at our shop! Bring your OTP.`,
         type: 'ready_for_pickup',
       },

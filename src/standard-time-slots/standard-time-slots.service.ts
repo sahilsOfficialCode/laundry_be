@@ -17,6 +17,7 @@ import {
   UpdateStandardTimeSlotDto,
 } from './dto/standard-time-slot.dto';
 import { Order, OrderDocument, OrderStatus } from '../orders/schemas/order.schema';
+import { isInstantAvailable } from '../common/instant-availability';
 
 /** Instant option injected into the slot list at runtime (never persisted). */
 export const INSTANT_SLOT = {
@@ -317,8 +318,11 @@ export class StandardTimeSlotsService {
 
     // If admin has not created any slots yet, fall back to a "Full Day" default.
     // Once admin adds slots the default is replaced automatically.
-    const pickupSlots  = [INSTANT_SLOT, ...(adminPickup.length  > 0 ? adminPickup  : [FULL_DAY_SLOT])];
-    const deliverySlots = [INSTANT_SLOT, ...(adminDelivery.length > 0 ? adminDelivery : [FULL_DAY_SLOT])];
+    // Instant is omitted entirely once past today's cutoff time (see
+    // INSTANT_ORDER_CUTOFF_TIME / isInstantAvailable) — no other slot rule changes.
+    const instantSlot = isInstantAvailable() ? [INSTANT_SLOT] : [];
+    const pickupSlots  = [...instantSlot, ...(adminPickup.length  > 0 ? adminPickup  : [FULL_DAY_SLOT])];
+    const deliverySlots = [...instantSlot, ...(adminDelivery.length > 0 ? adminDelivery : [FULL_DAY_SLOT])];
 
     return { date, pickupSlots, deliverySlots };
   }
