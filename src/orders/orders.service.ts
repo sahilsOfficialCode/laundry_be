@@ -14,7 +14,7 @@ import { Model, isValidObjectId } from 'mongoose';
 
 
 
-import { Order, OrderDocument, OrderStatus, DeliveryType, PaymentStatus } from './schemas/order.schema';
+import { Order, OrderDocument, OrderStatus, DeliveryType, PickupType, PaymentStatus } from './schemas/order.schema';
 
 import { Cart, CartDocument } from '../cart/schemas/cart.schema';
 
@@ -567,6 +567,9 @@ export class OrdersService {
       address: checkoutContext.address,
 
       pickupType: checkoutContext.serviceType,
+
+      receptionDetails:
+        checkoutContext.serviceType === PickupType.HOME_RECEPTION ? checkoutContext.receptionDetails : undefined,
 
       deliveryType,
 

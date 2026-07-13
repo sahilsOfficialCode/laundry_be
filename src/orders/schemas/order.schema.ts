@@ -146,6 +146,15 @@ export class Order {
   @Prop({ enum: PickupType, required: false })
   pickupType?: PickupType;
 
+  /** Building reception/security-desk details — only set when pickupType is HOME_RECEPTION. */
+  @Prop({ type: Object, required: false })
+  receptionDetails?: {
+    receptionName?: string;
+    flatVillaNumber?: string;
+    securityInstructions?: string;
+    pickupNotes?: string;
+  };
+
 
 
   /** How the finished order gets back to the customer — chosen at checkout, editable until paid. */
