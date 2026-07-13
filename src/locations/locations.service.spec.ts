@@ -11,8 +11,7 @@ import { isInstantAvailable } from '../common/instant-availability';
 
 jest.mock('../common/instant-availability', () => ({
   isInstantAvailable: jest.fn(),
-  INSTANT_ORDER_UNAVAILABLE_MESSAGE:
-    "Instant orders are unavailable after today's cutoff time. Please choose a scheduled pickup.",
+  INSTANT_ORDER_UNAVAILABLE_MESSAGE: 'Instant not available',
 }));
 
 describe('LocationsService — Instant checkout validation', () => {
@@ -89,9 +88,7 @@ describe('LocationsService — Instant checkout validation', () => {
     ).rejects.toThrow(BadRequestException);
     await expect(
       service.validateBookingEligibility(bookingPayload as any),
-    ).rejects.toThrow(
-      "Instant orders are unavailable after today's cutoff time. Please choose a scheduled pickup.",
-    );
+    ).rejects.toThrow('Instant not available');
   });
 
   it('does not affect non-Instant (scheduled) bookings', async () => {

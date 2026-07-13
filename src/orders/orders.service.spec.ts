@@ -250,9 +250,7 @@ describe('OrdersService — checkout delivery-date computation', () => {
           pickupSlot: 'instant',
           deliveryType: DeliveryType.SELF_PICKUP,
         } as any),
-      ).rejects.toThrow(
-        "Instant orders are unavailable after today's cutoff time. Please choose a scheduled pickup.",
-      );
+      ).rejects.toThrow('Instant not available');
     });
 
     // Regression test: Drop at Shop (and any other flow where the client falls
@@ -270,9 +268,7 @@ describe('OrdersService — checkout delivery-date computation', () => {
           pickupSlot: 'Full Day', // stale-client / FE-fallback label, not 'instant'
           deliveryType: DeliveryType.SELF_PICKUP,
         } as any),
-      ).rejects.toThrow(
-        "Instant orders are unavailable after today's cutoff time. Please choose a scheduled pickup.",
-      );
+      ).rejects.toThrow('Instant not available');
     });
 
     it('does not affect scheduled checkout after cutoff', async () => {

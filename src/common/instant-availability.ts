@@ -2,8 +2,7 @@ const DEFAULT_INSTANT_ORDER_CUTOFF_TIME = '20:00';
 
 const CUTOFF_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-export const INSTANT_ORDER_UNAVAILABLE_MESSAGE =
-  "Instant orders are unavailable after today's cutoff time. Please choose a scheduled pickup.";
+export const INSTANT_ORDER_UNAVAILABLE_MESSAGE = 'Instant not available';
 
 /**
  * Returns the current time as an HH:MM string in IST (UTC+5:30). Mirrors the

@@ -526,19 +526,38 @@ export class LocationsService implements OnModuleInit {
       };
     }
 
-    const pickupSlots = (loc.pickupSlots || []).map((s: any) => ({
+    const adminPickupSlots = (loc.pickupSlots || []).map((s: any) => ({
       label: s.label,
       startTime: s.startTime,
       endTime: s.endTime,
       remainingCapacity: s.capacity ?? null,
     }));
 
-    const deliverySlots = (loc.deliverySlots || []).map((s: any) => ({
+    const adminDeliverySlots = (loc.deliverySlots || []).map((s: any) => ({
       label: s.label,
       startTime: s.startTime,
       endTime: s.endTime,
       remainingCapacity: s.capacity ?? null,
     }));
+
+    // This endpoint (checkout's slot/payment options) has its own slot list
+    // separate from standard-time-slots.service.ts's — it wasn't injecting
+    // the Instant meta-slot at all, so Instant carts never saw an Instant
+    // option here regardless of INSTANT_ORDER_CUTOFF_TIME. Mirror the same
+    // cutoff-gated injection used there.
+    const instantSlot = isInstantAvailable()
+      ? [{
+          _id: 'instant',
+          label: 'Instant',
+          startTime: null,
+          endTime: null,
+          remainingCapacity: null,
+          isInstant: true,
+        }]
+      : [];
+
+    const pickupSlots = [...instantSlot, ...adminPickupSlots];
+    const deliverySlots = [...instantSlot, ...adminDeliverySlots];
 
     const paymentMethods: string[] =
       (loc.enabledPaymentMethods || []).length > 0
