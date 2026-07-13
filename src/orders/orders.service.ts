@@ -821,6 +821,37 @@ export class OrdersService {
 
 
 
+  /**
+   * How much to knock off a bill because this is the customer's very first
+   * order. Reuses the admin's referral settings (min. first order value,
+   * welcome bonus, max reward cap) as the source of truth so there's one
+   * config screen instead of two. Eligibility is simply "zero prior
+   * completed orders" — once this order is paid it becomes that first
+   * completed order, so the check self-expires with no extra flag to manage.
+   * Returns 0 when not eligible.
+   */
+  private async resolveFirstOrderDiscount(
+    userId: string,
+    billAmount: number,
+  ): Promise<number> {
+    if (!billAmount || billAmount <= 0) return 0;
+
+    const config = await this.referralService.getFirstOrderIncentiveConfig();
+    if (!config.enabled) return 0;
+    if (billAmount < config.minimumOrderValue) return 0;
+
+    const hasCompletedOrder = await this.orderModel.exists({
+      userId,
+      paymentStatus: PaymentStatus.COMPLETED,
+    });
+    if (hasCompletedOrder) return 0;
+
+    let discount = config.rewardAmount;
+    if (config.maxCap > 0) discount = Math.min(discount, config.maxCap);
+    discount = Math.min(discount, billAmount);
+    return Math.round(discount * 100) / 100;
+  }
+
   // Get single order (owner only)
 
   async findById(orderId: string, userId: string) {
@@ -960,6 +991,23 @@ export class OrdersService {
         order.billAmount = dto.billAmount;
       }
 
+      // First-order discount — applied once the real bill is known so the
+      // customer sees (and pays) the reduced amount, and it's baked into
+      // billAmount before the Razorpay order is ever minted. Naturally never
+      // re-applies on later orders since eligibility requires zero prior
+      // completed orders.
+      const firstOrderDiscount = await this.resolveFirstOrderDiscount(
+        order.userId,
+        order.billAmount!,
+      );
+      if (firstOrderDiscount > 0) {
+        order.originalBillAmount = order.billAmount;
+        order.firstOrderDiscountAmount = firstOrderDiscount;
+        order.billAmount = Math.round((order.billAmount! - firstOrderDiscount) * 100) / 100;
+      } else {
+        order.firstOrderDiscountAmount = 0;
+      }
+
       // Pickup time is optional — set it only if provided.
 
       if (dto.weightKg != null) order.weightKg = dto.weightKg;
@@ -1096,8 +1144,11 @@ export class OrdersService {
           _id: updatedOrder._id,
           status: updatedOrder.status,
           paymentStatus: (updatedOrder as any).paymentStatus,
-          billAmount: updatedOrder.billAmount,
+          // Use the pre-discount value so our own first-order discount never
+          // shrinks the order below the referrer's minimumOrderValue gate.
+          billAmount: updatedOrder.originalBillAmount ?? updatedOrder.billAmount,
           totalAmount: updatedOrder.totalAmount,
+          firstOrderDiscountAmount: updatedOrder.firstOrderDiscountAmount,
         })
         .catch(() => { /* swallow — referral processing is best-effort */ });
     }
@@ -1431,9 +1482,11 @@ export class OrdersService {
 
         paymentStatus: (saved as any).paymentStatus,
 
-        billAmount: saved.billAmount,
+        billAmount: saved.originalBillAmount ?? saved.billAmount,
 
         totalAmount: saved.totalAmount,
+
+        firstOrderDiscountAmount: saved.firstOrderDiscountAmount,
 
       })
 

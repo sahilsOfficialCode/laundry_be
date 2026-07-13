@@ -79,6 +79,30 @@ export class ReferralService {
     return Boolean(existing);
   }
 
+  // ── First-order incentive (checkout-time discount) ─────────────────────────
+
+  /**
+   * Config the first-order discount is derived from — reuses the same
+   * admin-configured referral settings shown on the "Refer & Earn" screen
+   * (min. first order, max reward cap, welcome bonus for the friend) so
+   * there's a single place admins tune both the referral welcome bonus and
+   * the general first-order incentive.
+   */
+  async getFirstOrderIncentiveConfig(): Promise<{
+    enabled: boolean;
+    minimumOrderValue: number;
+    rewardAmount: number;
+    maxCap: number;
+  }> {
+    const settings = await this.settingsService.get();
+    return {
+      enabled: settings.referralEnabled && settings.refereeRewardAmount > 0,
+      minimumOrderValue: settings.minimumOrderValue ?? 0,
+      rewardAmount: settings.refereeRewardAmount ?? 0,
+      maxCap: settings.maximumReferralReward ?? 0,
+    };
+  }
+
   // ── GET /referral/my ───────────────────────────────────────────────────────
 
   async getMyReferral(userId: string) {
@@ -316,6 +340,9 @@ export class ReferralService {
       paymentStatus: string;
       billAmount?: number;
       totalAmount?: number;
+      /** Set when the referee already got their welcome bonus as an instant
+       *  checkout-time discount on this order — skip crediting it again. */
+      firstOrderDiscountAmount?: number;
     },
   ): Promise<void> {
     const referral = await this.repo.findReferralByReferee(refereeId);
@@ -355,7 +382,9 @@ export class ReferralService {
     });
 
     // Create the reward records now that we know the order value (for %).
-    await this.rewardService.createPendingRewards(referral as any, settings);
+    await this.rewardService.createPendingRewards(referral as any, settings, {
+      skipRefereeReward: (order.firstOrderDiscountAmount ?? 0) > 0,
+    });
 
     // Release immediately (all conditions met). Admins can also gate this.
     const credited = await this.rewardService.releaseRewards(
