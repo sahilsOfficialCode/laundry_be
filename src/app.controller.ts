@@ -64,7 +64,7 @@ export class AppController {
 <body>
   <div class="card">
     <div class="logo">🧺</div>
-    <h1>Welcome to LaundryBrew v.4</h1>
+    <h1>Welcome to LaundryBrew v.5</h1>
     <p>Fresh clothes, brewed to perfection.</p>
     <div class="status"><span class="dot"></span> API is up and running</div>
   </div>
