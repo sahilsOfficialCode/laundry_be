@@ -713,13 +713,23 @@ export class OrdersService {
 
   /**
    * USER: Re-confirm or change how the finished order will get back to them
-   * (self-pickup vs home-delivery). Allowed any time before payment is
-   * completed — once paid (deliveryOtp generated), the choice is locked in
-   * since admin/dispatch planning depends on it.
+   * (self-pickup vs home-delivery). Only allowed pre-dispatch (ITEMIZED /
+   * PROCESSING) and before payment — once admin has committed to a delivery
+   * path by advancing to READY_FOR_PICKUP/OUT_FOR_DELIVERY (driver assignment
+   * etc.), or once paid (a customer can still pay early during PROCESSING,
+   * before dispatch), the choice is locked in. Status check is allowlisted
+   * rather than blacklisted so a future status doesn't accidentally become
+   * editable by omission.
    */
   async updateDeliveryDetails(orderId: string, userId: string, dto: UpdateDeliveryDetailsDto) {
     const order = await this.orderModel.findOne({ _id: orderId, userId });
     if (!order) throw new NotFoundException('Order not found');
+
+    if (order.status !== OrderStatus.ITEMIZED && order.status !== OrderStatus.PROCESSING) {
+      throw new BadRequestException(
+        'Delivery details can no longer be changed once the order is being dispatched.',
+      );
+    }
 
     if (order.paymentStatus === PaymentStatus.COMPLETED) {
       throw new BadRequestException(
@@ -1070,15 +1080,11 @@ export class OrdersService {
 
 
 
-    // OUT_FOR_DELIVERY → set tracking fields (OTP is already set after payment)
+    // OUT_FOR_DELIVERY → set tracking fields. Payment is no longer required
+    // to dispatch — the customer pays after the order is out for delivery /
+    // ready for pickup, and that payment is what generates deliveryOtp.
 
     if (dto.status === OrderStatus.OUT_FOR_DELIVERY) {
-
-      if (!order.deliveryOtp) {
-
-        throw new BadRequestException('Cannot dispatch order: payment has not been completed yet. The user must pay before the order is dispatched.');
-
-      }
 
       if (dto.etaMinutes       != null) order.etaMinutes       = dto.etaMinutes;
 
@@ -1092,17 +1098,8 @@ export class OrdersService {
 
 
 
-    // READY_FOR_PICKUP → self-pickup orders skip driver/partner assignment;
-    // OTP must already exist (payment done), same gate as OUT_FOR_DELIVERY.
-    if (dto.status === OrderStatus.READY_FOR_PICKUP) {
-
-      if (!order.deliveryOtp) {
-
-        throw new BadRequestException('Cannot mark ready for pickup: payment has not been completed yet. The user must pay first.');
-
-      }
-
-    }
+    // READY_FOR_PICKUP → self-pickup orders skip driver/partner assignment.
+    // Payment is no longer required to reach this status (see OUT_FOR_DELIVERY above).
 
 
 
