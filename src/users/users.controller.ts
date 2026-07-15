@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 import { UserAddressDto } from './dto/user-address.dto';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -71,6 +72,16 @@ export class UsersController {
   @Roles(UserRole.ADMIN)
   async unblock(@Param('id') id: string) {
     return this.usersService.unblockUser(id);
+  }
+
+  // Note: must stay registered after the literal 'profile' route above so
+  // that route continues to match '/users/profile' rather than being
+  // shadowed by this ':id' wildcard.
+  @Patch(':id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  async updateUser(@Param('id') id: string, @Body() dto: UpdateUserDto) {
+    return this.usersService.updateUserByAdmin(id, dto);
   }
 
   // ── Admin: manage addresses for any user ────────────────────────────────
