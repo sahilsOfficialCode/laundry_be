@@ -407,14 +407,14 @@ export class NotificationsService {
       },
       OUT_FOR_DELIVERY: {
         title: 'Out for Delivery 🚀',
-        body: `Your fresh clothes are on the way! Share your OTP when the rider arrives for Order #${orderNumber}.`,
+        body: `Order #${orderNumber} is ready. Open the LaundryBrew app to complete payment and receive your delivery OTP.`,
         type: 'out_for_delivery',
       },
       // SELF_PICKUP-only status — no "on the way" notification is ever sent
       // for these orders; this is the equivalent milestone.
       READY_FOR_PICKUP: {
         title: 'Ready for Delivery 🎉',
-        body: `Your order #${orderNumber} is ready — come collect it at our shop! Bring your OTP.`,
+        body: `Order #${orderNumber} is ready. Open the LaundryBrew app to complete payment and receive your delivery OTP.`,
         type: 'ready_for_pickup',
       },
       COMPLETED: isSelfPickup

@@ -195,7 +195,9 @@ export class WalletService {
     }
     if (
       order.status !== OrderStatus.ITEMIZED &&
-      order.status !== OrderStatus.PROCESSING
+      order.status !== OrderStatus.PROCESSING &&
+      order.status !== OrderStatus.READY_FOR_PICKUP &&
+      order.status !== OrderStatus.OUT_FOR_DELIVERY
     ) {
       throw new BadRequestException('Payment is available once your order is itemized and the bill is confirmed');
     }

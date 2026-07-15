@@ -12,8 +12,9 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-import { DeliveryType } from '../schemas/order.schema';
+import { DeliveryType, PickupType } from '../schemas/order.schema';
 import { DeliveryAddressDto } from './delivery-address.dto';
+import { ReceptionDetailsDto } from './reception-details.dto';
 
 export class CheckoutContextDto {
   @IsOptional()
@@ -58,6 +59,17 @@ export class CheckoutContextDto {
   @IsOptional()
   @IsString()
   city?: string;
+
+  /** How the dirty laundry gets collected from the customer. */
+  @IsOptional()
+  @IsEnum(PickupType)
+  serviceType?: PickupType;
+
+  /** Building reception/security-desk details — only used when serviceType is HOME_RECEPTION. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ReceptionDetailsDto)
+  receptionDetails?: ReceptionDetailsDto;
 
   /** How the finished order should get back to the customer. Defaults to HOME_DELIVERY. */
   @IsOptional()
