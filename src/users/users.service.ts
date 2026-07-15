@@ -10,10 +10,12 @@ import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { User, UserAddress, UserDocument, UserRole } from './schemas/user.schema';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 import { UserAddressDto } from './dto/user-address.dto';
 import { GetAddressesFilterDto } from './dto/get-addresses-filter.dto';
 import { ServiceZonesService } from '../service-zones/service-zones.service';
 import { generateReferralCode } from '../referrals/utils/referral-code.util';
+import { toE164 } from '../common/validators/is-mobile-number.validator';
 
 /** Address types that skip service-zone coverage checks (customer can be anywhere) */
 const EXEMPT_ADDRESS_TYPES = ['pickup', 'drop'];
@@ -296,6 +298,71 @@ export class UsersService {
   /** @deprecated kept for backward compatibility — use updateProfile */
   async updateProfileName(userId: string, name?: string): Promise<any> {
     return this.updateProfile(userId, { name });
+  }
+
+  /**
+   * Admin-only edit of another user's core profile fields (name/email/mobile).
+   * Distinct from `updateProfile`, which is the self-service "edit my own
+   * profile" path — this one is gated by RolesGuard/Roles(ADMIN) at the
+   * controller and can target any user by id.
+   */
+  async updateUserByAdmin(id: string, dto: UpdateUserDto): Promise<any> {
+    const update: Record<string, string> = {};
+
+    if (dto.name !== undefined) {
+      const trimmed = dto.name.trim();
+      if (!trimmed) throw new BadRequestException('Name cannot be empty');
+      update.name = trimmed;
+    }
+
+    if (dto.email !== undefined) {
+      const trimmedEmail = dto.email.trim().toLowerCase();
+      if (!trimmedEmail) throw new BadRequestException('Email cannot be empty');
+      const existing = await this.userModel.findOne({
+        email: trimmedEmail,
+        _id: { $ne: id },
+      });
+      if (existing) {
+        throw new ConflictException('Email is already in use by another user');
+      }
+      update.email = trimmedEmail;
+    }
+
+    if (dto.mobileNumber !== undefined) {
+      // Normalize to E.164 so it matches however other numbers were stored
+      // (login/OTP flows normalize the same way); fall back to the trimmed
+      // input if it doesn't parse, so validation errors surface instead of
+      // silently storing something unnormalized.
+      const normalized = toE164(dto.mobileNumber) ?? dto.mobileNumber.trim();
+      const existing = await this.userModel.findOne({
+        mobileNumber: normalized,
+        _id: { $ne: id },
+      });
+      if (existing) {
+        throw new ConflictException('Mobile number is already in use by another user');
+      }
+      update.mobileNumber = normalized;
+    }
+
+    if (Object.keys(update).length === 0) {
+      throw new BadRequestException('Provide at least one field to update.');
+    }
+
+    try {
+      const user = await this.userModel
+        .findByIdAndUpdate(id, { $set: update }, { new: true })
+        .select('-password');
+      if (!user) throw new NotFoundException('User not found');
+      return user;
+    } catch (err: any) {
+      // Race-condition guard: a duplicate slipping past the pre-check above
+      // (e.g. two concurrent admin edits) surfaces as a Mongo unique-index
+      // violation rather than an unhandled 500.
+      if (err?.code === 11000) {
+        throw new ConflictException('Email or mobile number is already in use by another user');
+      }
+      throw err;
+    }
   }
 
   async getAddresses(
