@@ -12,6 +12,7 @@ import { RazorpayWebhookService } from './razorpay-webhook.service';
 import { ReconciliationService } from './reconciliation.service';
 import { PaymentMetricsService } from './payment-metrics.service';
 import { PaymentAlertsService } from './payment-alerts.service';
+import { CouponsModule } from '../coupons/coupons.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { PaymentAlertsService } from './payment-alerts.service';
     OrdersModule,
     AuthModule,
     NotificationsModule,
+    CouponsModule,
   ],
   providers: [
     PaymentsService,

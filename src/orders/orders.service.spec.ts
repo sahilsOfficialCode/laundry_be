@@ -298,3 +298,134 @@ describe('OrdersService — checkout delivery-date computation', () => {
     });
   });
 });
+
+describe('OrdersService — findAssignedToPartner customer contact exposure', () => {
+  // Chainable stand-in for Mongoose's find().sort().limit() — resolves to
+  // `result` when awaited, regardless of which chain methods are called.
+  function chainable<T>(result: T) {
+    const chain: any = {
+      sort: () => chain,
+      limit: () => chain,
+      then: (resolve: any, reject: any) => Promise.resolve(result).then(resolve, reject),
+    };
+    return chain;
+  }
+
+  function makeOrderDoc(fields: Record<string, any>) {
+    return {
+      ...fields,
+      toObject() {
+        const { toObject, ...rest } = this;
+        return rest;
+      },
+    };
+  }
+
+  it('exposes only { name, phone, address } on `customer`, and formats address with the deliveryAddress → address fallback — never leaking password/wallet/tokens', async () => {
+    const activeOrders = [
+      // deliveryAddress present → should be preferred over the stale pickup `address`.
+      makeOrderDoc({
+        _id: 'order-a',
+        userId: 'user-1',
+        status: 'OUT_FOR_DELIVERY',
+        address: 'STALE PICKUP ADDRESS — should not be used',
+        deliveryAddress: {
+          houseNo: '12',
+          buildingName: '',
+          street: 'Palm St',
+          area: 'Andheri',
+          landmark: '',
+          city: 'Mumbai',
+          state: 'MH',
+          pincode: '400001',
+        },
+      }),
+      // no deliveryAddress → falls back to the plain pickup `address` string.
+      makeOrderDoc({
+        _id: 'order-b',
+        userId: 'user-2',
+        status: 'OUT_FOR_DELIVERY',
+        address: 'Plain pickup address, Pune',
+      }),
+    ];
+    const completedOrders = [
+      // neither deliveryAddress nor address → customer.address must be undefined, not throw.
+      makeOrderDoc({ _id: 'order-c', userId: 'user-1', status: 'COMPLETED' }),
+    ];
+
+    const orderModel: any = {
+      find: jest.fn((filter: any) =>
+        filter.status === 'COMPLETED' ? chainable(completedOrders) : chainable(activeOrders),
+      ),
+    };
+
+    // Simulates a `User` document leaking sensitive fields all the way up to
+    // this lookup (e.g. a future regression in UsersService.findNamesByIds'
+    // `.select()` clause) — the assertions below prove OrdersService's own
+    // mapping allowlists only name/mobileNumber regardless.
+    const findNamesByIds = jest.fn().mockResolvedValue(
+      new Map([
+        [
+          'user-1',
+          {
+            name: 'Asha Rao',
+            mobileNumber: '9000000001',
+            password: '$2b$10$leaked-hash-should-never-appear',
+            walletBalance: 500,
+            fcmTokens: ['device-token-should-never-appear'],
+          } as any,
+        ],
+        ['user-2', { name: 'Rohit Iyer', mobileNumber: '9000000002' } as any],
+      ]),
+    );
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrdersService,
+        { provide: getModelToken(Order.name), useValue: orderModel },
+        { provide: getModelToken(Cart.name), useValue: {} },
+        { provide: getModelToken(LaundryService.name), useValue: {} },
+        { provide: getModelToken(StandardTimeSlot.name), useValue: {} },
+        { provide: LocationsService, useValue: {} },
+        { provide: ServiceZonesService, useValue: {} },
+        { provide: NotificationsService, useValue: {} },
+        { provide: SupportEventsService, useValue: {} },
+        { provide: UploadService, useValue: {} },
+        { provide: ClothTypesService, useValue: {} },
+        { provide: ReferralService, useValue: {} },
+        { provide: UsersService, useValue: { findNamesByIds } },
+      ],
+    }).compile();
+
+    const service = module.get<OrdersService>(OrdersService);
+    const result = await service.findAssignedToPartner('partner-1');
+
+    // Exactly one batched user lookup for both active + completed lists.
+    expect(findNamesByIds).toHaveBeenCalledTimes(1);
+
+    expect(result.active[0].customer).toEqual({
+      name: 'Asha Rao',
+      phone: '9000000001',
+      address: '12, Palm St, Andheri, Mumbai, MH, 400001',
+    });
+    expect(result.active[1].customer).toEqual({
+      name: 'Rohit Iyer',
+      phone: '9000000002',
+      address: 'Plain pickup address, Pune',
+    });
+    expect(result.completed[0].customer).toEqual({
+      name: 'Asha Rao',
+      phone: '9000000001',
+      address: undefined,
+    });
+
+    const forbiddenKeys = ['password', 'walletBalance', 'fcmTokens', 'email', 'sessionsValidFrom'];
+    const serialized = JSON.stringify(result);
+    for (const key of forbiddenKeys) {
+      expect(serialized).not.toContain(key);
+    }
+    expect(serialized.toLowerCase()).not.toContain('leaked');
+    expect(serialized.toLowerCase()).not.toContain('should never appear');
+    expect(Object.keys(result.active[0].customer).sort()).toEqual(['address', 'name', 'phone']);
+  });
+});

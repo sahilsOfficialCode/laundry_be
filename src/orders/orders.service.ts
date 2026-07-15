@@ -14,7 +14,7 @@ import { Model, isValidObjectId } from 'mongoose';
 
 
 
-import { Order, OrderDocument, OrderStatus, DeliveryType, PaymentStatus } from './schemas/order.schema';
+import { Order, OrderDocument, OrderStatus, DeliveryType, PickupType, PaymentStatus } from './schemas/order.schema';
 
 import { Cart, CartDocument } from '../cart/schemas/cart.schema';
 
@@ -60,6 +60,8 @@ import { ClothTypesService } from '../cloth-types/cloth-types.service';
 import { ReferralService } from '../referrals/services/referral.service';
 
 import { UsersService } from '../users/users.service';
+
+import { CouponsService } from '../coupons/services/coupons.service';
 
 
 
@@ -118,6 +120,8 @@ export class OrdersService {
     private readonly referralService: ReferralService,
 
     private readonly usersService: UsersService,
+
+    private readonly couponsService: CouponsService,
 
   ) {}
 
@@ -458,13 +462,28 @@ export class OrdersService {
 
     // Calculate total
 
-    const totalAmount = orderItems.reduce(
+    const cartTotalAmount = orderItems.reduce(
 
       (sum, item) => sum + item.price * item.quantity,
 
       0,
 
     );
+
+    // ── Coupon ("Have a Coupon?" at checkout) ───────────────────────────────
+    // Always re-validated server-side against this specific user's
+    // assignments — the coupon code is never trusted as-is. A rejected
+    // coupon fails checkout with the same messages the /customer/coupon
+    // endpoints return, so the FE can show one consistent error surface.
+    let couponPreview: Awaited<ReturnType<typeof this.couponsService.validateForUser>> | null = null;
+    if (checkoutContext.couponCode?.trim()) {
+      couponPreview = await this.couponsService.validateForUser(userId, {
+        couponCode: checkoutContext.couponCode,
+        orderAmount: cartTotalAmount,
+      });
+    }
+
+    const totalAmount = couponPreview ? couponPreview.finalAmount : cartTotalAmount;
 
 
 
@@ -566,6 +585,11 @@ export class OrdersService {
 
       address: checkoutContext.address,
 
+      pickupType: checkoutContext.serviceType,
+
+      receptionDetails:
+        checkoutContext.serviceType === PickupType.HOME_RECEPTION ? checkoutContext.receptionDetails : undefined,
+
       deliveryType,
 
       deliveryAddress:
@@ -594,6 +618,10 @@ export class OrdersService {
       // Seed status history with the initial placement event
 
       statusHistory: [{ status: OrderStatus.ORDER_PLACED, timestamp: new Date() }],
+
+      couponCode: couponPreview?.couponCode,
+      couponId: couponPreview?.couponId,
+      couponDiscountAmount: couponPreview?.discountAmount ?? 0,
 
     });
 
@@ -708,13 +736,23 @@ export class OrdersService {
 
   /**
    * USER: Re-confirm or change how the finished order will get back to them
-   * (self-pickup vs home-delivery). Allowed any time before payment is
-   * completed — once paid (deliveryOtp generated), the choice is locked in
-   * since admin/dispatch planning depends on it.
+   * (self-pickup vs home-delivery). Only allowed pre-dispatch (ITEMIZED /
+   * PROCESSING) and before payment — once admin has committed to a delivery
+   * path by advancing to READY_FOR_PICKUP/OUT_FOR_DELIVERY (driver assignment
+   * etc.), or once paid (a customer can still pay early during PROCESSING,
+   * before dispatch), the choice is locked in. Status check is allowlisted
+   * rather than blacklisted so a future status doesn't accidentally become
+   * editable by omission.
    */
   async updateDeliveryDetails(orderId: string, userId: string, dto: UpdateDeliveryDetailsDto) {
     const order = await this.orderModel.findOne({ _id: orderId, userId });
     if (!order) throw new NotFoundException('Order not found');
+
+    if (order.status !== OrderStatus.ITEMIZED && order.status !== OrderStatus.PROCESSING) {
+      throw new BadRequestException(
+        'Delivery details can no longer be changed once the order is being dispatched.',
+      );
+    }
 
     if (order.paymentStatus === PaymentStatus.COMPLETED) {
       throw new BadRequestException(
@@ -812,6 +850,53 @@ export class OrdersService {
       plain.customerName = info?.name;
 
       plain.customerPhone = info?.mobileNumber;
+
+      return plain;
+
+    });
+
+  }
+
+  /**
+   * Best-available customer-facing address for a single order — prefers the
+   * structured return-delivery address (deliveryAddress), falling back to the
+   * plain pickup address string (address). Returns undefined if neither is
+   * set, rather than an empty string, so callers can distinguish "no address
+   * on file" from a genuinely blank value.
+   */
+  private formatOrderAddress(order: OrderDocument | any): string | undefined {
+    const d = order.deliveryAddress;
+    if (d) {
+      const line = [d.houseNo, d.buildingName, d.street, d.area, d.landmark, d.city, d.state, d.pincode]
+        .filter((part) => typeof part === 'string' && part.trim().length > 0)
+        .join(', ');
+      if (line) return line;
+    }
+    return order.address || undefined;
+  }
+
+  /**
+   * Attaches a minimal `customer` object ({ name, phone, address }) to each
+   * order for the delivery-partner view. Deliberately allowlists only these
+   * three fields from the User lookup — never spreads the full user document
+   * — so password/email/walletBalance/fcmTokens/etc. can never leak here even
+   * if `findNamesByIds` is later changed to select more fields.
+   */
+  private async attachCustomerContactForDelivery(orders: OrderDocument[]) {
+
+    const userMap = await this.usersService.findNamesByIds(orders.map((o) => o.userId));
+
+    return orders.map((o) => {
+
+      const plain: any = o.toObject ? o.toObject() : o;
+
+      const info = userMap.get(String(o.userId));
+
+      plain.customer = {
+        name: info?.name,
+        phone: info?.mobileNumber,
+        address: this.formatOrderAddress(o),
+      };
 
       return plain;
 
@@ -1018,15 +1103,11 @@ export class OrdersService {
 
 
 
-    // OUT_FOR_DELIVERY → set tracking fields (OTP is already set after payment)
+    // OUT_FOR_DELIVERY → set tracking fields. Payment is no longer required
+    // to dispatch — the customer pays after the order is out for delivery /
+    // ready for pickup, and that payment is what generates deliveryOtp.
 
     if (dto.status === OrderStatus.OUT_FOR_DELIVERY) {
-
-      if (!order.deliveryOtp) {
-
-        throw new BadRequestException('Cannot dispatch order: payment has not been completed yet. The user must pay before the order is dispatched.');
-
-      }
 
       if (dto.etaMinutes       != null) order.etaMinutes       = dto.etaMinutes;
 
@@ -1040,17 +1121,8 @@ export class OrdersService {
 
 
 
-    // READY_FOR_PICKUP → self-pickup orders skip driver/partner assignment;
-    // OTP must already exist (payment done), same gate as OUT_FOR_DELIVERY.
-    if (dto.status === OrderStatus.READY_FOR_PICKUP) {
-
-      if (!order.deliveryOtp) {
-
-        throw new BadRequestException('Cannot mark ready for pickup: payment has not been completed yet. The user must pay first.');
-
-      }
-
-    }
+    // READY_FOR_PICKUP → self-pickup orders skip driver/partner assignment.
+    // Payment is no longer required to reach this status (see OUT_FOR_DELIVERY above).
 
 
 
@@ -1532,7 +1604,13 @@ export class OrdersService {
 
     ]);
 
-    return { active, completed };
+    // Single batched user lookup for both lists to avoid an extra query.
+    const combined = await this.attachCustomerContactForDelivery([...active, ...completed]);
+
+    return {
+      active: combined.slice(0, active.length),
+      completed: combined.slice(active.length),
+    };
 
   }
 

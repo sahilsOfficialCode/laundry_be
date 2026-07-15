@@ -49,6 +49,21 @@ export enum DeliveryType {
 
 }
 
+/**
+ * How the *dirty* laundry gets collected from the customer at booking time —
+ * independent of DeliveryType, which governs the return leg. Values mirror
+ * the Flutter app's CheckoutServiceType.apiValue strings exactly.
+ */
+export enum PickupType {
+
+  COLLECT_FROM_HOME = 'collect_from_home',
+
+  DROP_AT_SHOP       = 'drop_at_shop',
+
+  HOME_RECEPTION     = 'home_reception',
+
+}
+
 
 
 @Schema({ timestamps: true })
@@ -126,6 +141,19 @@ export class Order {
   @Prop()
 
   address?: string;
+
+  /** How the dirty laundry was collected — chosen at checkout, not editable afterward. */
+  @Prop({ enum: PickupType, required: false })
+  pickupType?: PickupType;
+
+  /** Building reception/security-desk details — only set when pickupType is HOME_RECEPTION. */
+  @Prop({ type: Object, required: false })
+  receptionDetails?: {
+    receptionName?: string;
+    flatVillaNumber?: string;
+    securityInstructions?: string;
+    pickupNotes?: string;
+  };
 
 
 
@@ -336,6 +364,30 @@ export class Order {
   @Prop({ required: false, default: 0 })
 
   firstOrderDiscountAmount?: number;
+
+
+
+  // ── Coupon (Private Coupon Management System) ──────────────────────────────
+
+  /** Coupon code applied at checkout, if any. Uppercased. */
+  @Prop({ required: false, index: true })
+  couponCode?: string;
+
+  /** Coupon's Mongo _id — kept alongside couponCode so redemption doesn't need a lookup by code. */
+  @Prop({ required: false })
+  couponId?: string;
+
+  /** ₹ discount granted by the coupon, already subtracted from totalAmount. 0/undefined when no coupon applied. */
+  @Prop({ required: false, default: 0 })
+  couponDiscountAmount?: number;
+
+  /**
+   * Set true once CouponsService.finalizeRedemption has recorded this
+   * order's redemption (usage counters incremented). Guards against
+   * re-running finalization on retried payment-confirmation calls.
+   */
+  @Prop({ required: false, default: false })
+  couponRedeemed?: boolean;
 
 
 

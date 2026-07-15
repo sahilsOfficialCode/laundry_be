@@ -186,6 +186,12 @@ export class NotificationsService {
           priority: 'high' as const,
           notification: {
             channelId: 'laundry_brew_high_importance',
+            // Explicit, in addition to the channel's own sound config —
+            // some OEM Android builds only honor sound when it's set on the
+            // message itself, not just the channel. Mirrors the apns sound
+            // below so both platforms play the device's default notification
+            // sound.
+            sound: 'default',
           },
         },
         apns: {
@@ -407,14 +413,14 @@ export class NotificationsService {
       },
       OUT_FOR_DELIVERY: {
         title: 'Out for Delivery 🚀',
-        body: `Your fresh clothes are on the way! Share your OTP when the rider arrives for Order #${orderNumber}.`,
+        body: `Order #${orderNumber} is ready. Open the LaundryBrew app to complete payment and receive your delivery OTP.`,
         type: 'out_for_delivery',
       },
       // SELF_PICKUP-only status — no "on the way" notification is ever sent
       // for these orders; this is the equivalent milestone.
       READY_FOR_PICKUP: {
         title: 'Ready for Delivery 🎉',
-        body: `Your order #${orderNumber} is ready — come collect it at our shop! Bring your OTP.`,
+        body: `Order #${orderNumber} is ready. Open the LaundryBrew app to complete payment and receive your delivery OTP.`,
         type: 'ready_for_pickup',
       },
       COMPLETED: isSelfPickup
