@@ -12,6 +12,7 @@ describe('PaymentFinalizationService — applyPaymentCaptured', () => {
   let notificationsService: { notifyPaymentSuccess: jest.Mock; notifyAdmin: jest.Mock };
   let metrics: PaymentMetricsService;
   let alerts: PaymentAlertsService;
+  let couponsService: { finalizeRedemption: jest.Mock };
   let service: PaymentFinalizationService;
 
   const baseInput = {
@@ -31,12 +32,14 @@ describe('PaymentFinalizationService — applyPaymentCaptured', () => {
     };
     metrics = new PaymentMetricsService();
     alerts = new PaymentAlertsService();
+    couponsService = { finalizeRedemption: jest.fn().mockResolvedValue({ redeemed: false }) };
     service = new PaymentFinalizationService(
       orderModel as any,
       paymentEventModel as any,
       notificationsService as any,
       metrics,
       alerts,
+      couponsService as any,
     );
   });
 

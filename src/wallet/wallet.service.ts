@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import {
@@ -18,9 +18,12 @@ import {
 import { PaymentsService } from '../payments/payments.service';
 import { CreateAddMoneyOrderDto, VerifyAddMoneyDto } from './dto/add-money.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { CouponsService } from '../coupons/services/coupons.service';
 
 @Injectable()
 export class WalletService {
+  private readonly logger = new Logger(WalletService.name);
+
   constructor(
     @InjectModel(WalletTransaction.name)
     private readonly txnModel: Model<WalletTransactionDocument>,
@@ -30,6 +33,7 @@ export class WalletService {
     private readonly orderModel: Model<OrderDocument>,
     private readonly paymentsService: PaymentsService,
     private readonly notificationsService: NotificationsService,
+    private readonly couponsService: CouponsService,
   ) {}
 
   // ── GET /wallet ────────────────────────────────────────────────────────────
@@ -257,6 +261,20 @@ export class WalletService {
       closingBalance: closing,
       createdBy: 'USER',
     });
+
+    // Redeem the coupon (if one was applied at checkout) now that payment has
+    // actually cleared — mirrors the Razorpay path in PaymentFinalizationService.
+    if (claimedOrder.couponId && claimedOrder.couponDiscountAmount) {
+      this.couponsService
+        .finalizeRedemption({
+          orderId: String(claimedOrder._id),
+          userId,
+          couponId: claimedOrder.couponId,
+          couponCode: claimedOrder.couponCode ?? '',
+          discountAmount: claimedOrder.couponDiscountAmount,
+        })
+        .catch((e) => this.logger.error(`Coupon finalizeRedemption failed for order ${claimedOrder._id}: ${e.message}`));
+    }
 
     // Fire payment success push notification (non-blocking)
     this.notificationsService

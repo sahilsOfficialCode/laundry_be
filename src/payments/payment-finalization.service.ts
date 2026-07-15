@@ -11,6 +11,7 @@ import {
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentMetricsService } from './payment-metrics.service';
 import { PaymentAlertsService } from './payment-alerts.service';
+import { CouponsService } from '../coupons/services/coupons.service';
 
 export interface ApplyPaymentCapturedInput {
   razorpayOrderId: string;
@@ -54,6 +55,7 @@ export class PaymentFinalizationService {
     private notificationsService: NotificationsService,
     private metrics: PaymentMetricsService,
     private alerts: PaymentAlertsService,
+    private couponsService: CouponsService,
   ) {}
 
   async applyPaymentCaptured(input: ApplyPaymentCapturedInput): Promise<ApplyPaymentCapturedResult> {
@@ -159,6 +161,25 @@ export class PaymentFinalizationService {
 
       // Side effects fire exactly once — only on the call that actually won
       // the transition above, never on a no-op replay.
+
+      // Redeem the coupon (if one was applied at checkout) now that payment
+      // has actually cleared. Awaited (not fire-and-forget) because this is
+      // a financial-correctness write, but a failure here must never undo
+      // the payment that already succeeded — log and move on.
+      if (updated.couponId && updated.couponDiscountAmount) {
+        this.couponsService
+          .finalizeRedemption({
+            orderId: updated._id.toString(),
+            userId: updated.userId,
+            couponId: updated.couponId,
+            couponCode: updated.couponCode ?? '',
+            discountAmount: updated.couponDiscountAmount,
+          })
+          .catch((e) =>
+            this.logger.error(`Coupon finalizeRedemption failed for order ${updated._id}: ${e.message}`),
+          );
+      }
+
       this.notificationsService
         .notifyPaymentSuccess(updated.userId, updated.orderNumber ?? '')
         .catch((e) => this.logger.error(`notifyPaymentSuccess failed for order ${updated._id}: ${e.message}`));

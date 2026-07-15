@@ -186,6 +186,12 @@ export class NotificationsService {
           priority: 'high' as const,
           notification: {
             channelId: 'laundry_brew_high_importance',
+            // Explicit, in addition to the channel's own sound config —
+            // some OEM Android builds only honor sound when it's set on the
+            // message itself, not just the channel. Mirrors the apns sound
+            // below so both platforms play the device's default notification
+            // sound.
+            sound: 'default',
           },
         },
         apns: {

@@ -81,4 +81,14 @@ export class CheckoutContextDto {
   @ValidateNested()
   @Type(() => DeliveryAddressDto)
   deliveryAddress?: DeliveryAddressDto;
+
+  /**
+   * Coupon code the customer entered at checkout ("Have a Coupon?"). Always
+   * re-validated server-side against the user's assignments — never trusted
+   * as-is. See OrdersService.initiateCheckout, where it's passed through to
+   * CouponsService.validateForUser.
+   */
+  @IsOptional()
+  @IsString()
+  couponCode?: string;
 }
