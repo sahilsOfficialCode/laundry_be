@@ -1,25 +1,18 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Post,
-  UseGuards,
-  Logger,
-} from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Post, UseGuards } from '@nestjs/common';
 import { CouponsService } from './services/coupons.service';
-import { ApplyCouponDto } from './dto/apply-coupon.dto';
-import { RecordCouponUsageDto } from './dto/record-usage.dto';
+import { ValidateCouponDto } from './dto/validate-coupon.dto';
+import { ApplyToOrderDto } from './dto/apply-to-order.dto';
+import { RemoveFromOrderDto } from './dto/remove-from-order.dto';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { CouponRateLimitGuard } from './guards/coupon-rate-limit.guard';
 
 /**
- * User-facing coupon endpoints
- * ✅ Security: JWT protected, rate limited, input validated
- * ✅ Optimized: Lean queries, proper error handling
+ * Customer-facing coupon endpoints. JwtAuthGuard is already applied
+ * globally (APP_GUARD in app.module.ts) so every route here requires a
+ * logged-in user; only coupons assigned to that specific user can ever
+ * validate or apply successfully — see CouponsService.validateForUser.
  */
-@Controller('coupons')
+@Controller('customer/coupon')
 @UseGuards(CouponRateLimitGuard)
 export class CouponsController {
   private readonly logger = new Logger(CouponsController.name);
@@ -27,93 +20,61 @@ export class CouponsController {
   constructor(private readonly couponsService: CouponsService) {}
 
   /**
-   * POST /coupons/apply — Apply a coupon code and get the discount
-   * ✅ Security: Rate limited, input validated, no SQL injection
-   * ✅ Optimized: Cached active coupons
-   *
-   * Request: { couponCode: string, orderAmount: number }
-   * Response: { couponCode, originalAmount, discountAmount, finalAmount }
-   *
-   * Error Cases:
-   * - 400: Invalid coupon code format or order amount
-   * - 404: Coupon not found
-   * - 409: Coupon has reached redemption limit
-   * - 429: Too many requests
+   * GET /customer/coupon/my-coupons — coupons currently assigned to and
+   * usable by the logged-in user (active, within date window, allowance
+   * remaining). Powers a "Your coupons" list in the app, separate from
+   * validating one specific code.
+   */
+  @Get('my-coupons')
+  @HttpCode(HttpStatus.OK)
+  async myCoupons(@GetUser() user: any) {
+    const coupons = await this.couponsService.listMyCoupons(user?.sub);
+    return { coupons };
+  }
+
+  /**
+   * POST /customer/coupon/validate — check a coupon without applying it
+   * (used for the "Apply" button preview at checkout).
+   */
+  @Post('validate')
+  @HttpCode(HttpStatus.OK)
+  async validate(@GetUser() user: any, @Body() dto: ValidateCouponDto) {
+    const preview = await this.couponsService.validateForUser(user?.sub, dto);
+    return { valid: true, ...preview };
+  }
+
+  /**
+   * POST /customer/coupon/apply — same validation as /validate; returns the
+   * discount to apply at checkout. Does NOT mark the coupon as used — that
+   * only happens once the order is actually paid for (see
+   * PaymentFinalizationService / WalletService calling
+   * CouponsService.finalizeRedemption after payment success).
    */
   @Post('apply')
   @HttpCode(HttpStatus.OK)
-  async apply(@Body() dto: ApplyCouponDto) {
+  async apply(@GetUser() user: any, @Body() dto: ValidateCouponDto) {
     this.logger.debug(`Apply coupon request: ${dto.couponCode}`);
-
-    try {
-      return await this.couponsService.applyCoupon(dto);
-    } catch (error) {
-      this.logger.warn(`Coupon apply failed: ${error.message}`);
-      throw error;
-    }
+    const preview = await this.couponsService.validateForUser(user?.sub, dto);
+    return { applied: true, ...preview };
   }
 
   /**
-   * POST /coupons/record-usage — Record coupon usage after payment
-   * ✅ Security: User-authenticated, prevents duplicate recording
-   * This is called internally after order payment succeeds
-   *
-   * Request: { couponCode: string, orderId: string, discountAmount: number }
-   * Response: { success: boolean }
-   *
-   * Error Cases:
-   * - 400: Invalid input or coupon no longer active
-   * - 404: Coupon not found
-   * - 409: Usage already recorded for this order
-   * - 429: Too many requests
+   * POST /customer/coupon/apply-to-order — for the "pay for an already
+   * created order" screen: attaches the coupon to that specific order and
+   * persists the reduced payable amount, so whichever payment path runs
+   * next (Razorpay or wallet) charges the discounted amount.
    */
-  @Post('record-usage')
+  @Post('apply-to-order')
   @HttpCode(HttpStatus.OK)
-  async recordUsage(
-    @GetUser() user: any,
-    @Body() dto: RecordCouponUsageDto,
-  ) {
-    if (!user?.sub) {
-      this.logger.warn('Unauthorized coupon record-usage attempt');
-      throw new Error('Unauthorized');
-    }
-
-    this.logger.debug(
-      `Record coupon usage: ${dto.couponCode} for order ${dto.orderId}`,
-    );
-
-    try {
-      return await this.couponsService.recordUsage(dto, user.sub);
-    } catch (error) {
-      this.logger.warn(`Record usage failed: ${error.message}`);
-      throw error;
-    }
+  async applyToOrder(@GetUser() user: any, @Body() dto: ApplyToOrderDto) {
+    const preview = await this.couponsService.applyToOrder(user?.sub, dto.orderId, dto.couponCode);
+    return { applied: true, ...preview };
   }
 
-  /**
-   * GET /coupons/available — Get list of available coupons
-   * ✅ Optimized: Lean queries, only active coupons, safe defaults
-   * ✅ Security: Returns limited fields only
-   *
-   * Response: [{ code, description, discountAmount, minOrderAmount, expiryDate }]
-   *
-   * Error Cases:
-   * - 429: Too many requests
-   * Returns empty array on database error (graceful degradation)
-   */
-  @Get('available')
+  /** POST /customer/coupon/remove-from-order — undo apply-to-order before payment. */
+  @Post('remove-from-order')
   @HttpCode(HttpStatus.OK)
-  async available() {
-    this.logger.debug('Fetching available coupons');
-
-    try {
-      const coupons = await this.couponsService.getAvailable();
-      this.logger.debug(`Returned ${coupons.length} available coupons`);
-      return coupons;
-    } catch (error) {
-      this.logger.error(`Error fetching available coupons: ${error.message}`);
-      // Return empty array instead of error for better UX
-      return [];
-    }
+  async removeFromOrder(@GetUser() user: any, @Body() dto: RemoveFromOrderDto) {
+    return this.couponsService.removeFromOrder(user?.sub, dto.orderId);
   }
 }

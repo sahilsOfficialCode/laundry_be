@@ -339,6 +339,30 @@ export class Order {
 
 
 
+  // ── Coupon (Private Coupon Management System) ──────────────────────────────
+
+  /** Coupon code applied at checkout, if any. Uppercased. */
+  @Prop({ required: false, index: true })
+  couponCode?: string;
+
+  /** Coupon's Mongo _id — kept alongside couponCode so redemption doesn't need a lookup by code. */
+  @Prop({ required: false })
+  couponId?: string;
+
+  /** ₹ discount granted by the coupon, already subtracted from totalAmount. 0/undefined when no coupon applied. */
+  @Prop({ required: false, default: 0 })
+  couponDiscountAmount?: number;
+
+  /**
+   * Set true once CouponsService.finalizeRedemption has recorded this
+   * order's redemption (usage counters incremented). Guards against
+   * re-running finalization on retried payment-confirmation calls.
+   */
+  @Prop({ required: false, default: false })
+  couponRedeemed?: boolean;
+
+
+
   // ── Cloth-type breakdown for ITEMIZED workflow ────────────────────────────────
 
   @Prop({

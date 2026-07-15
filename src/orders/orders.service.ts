@@ -61,6 +61,8 @@ import { ReferralService } from '../referrals/services/referral.service';
 
 import { UsersService } from '../users/users.service';
 
+import { CouponsService } from '../coupons/services/coupons.service';
+
 
 
 export type OrderPhotoType = 'damage' | 'weighing';
@@ -118,6 +120,8 @@ export class OrdersService {
     private readonly referralService: ReferralService,
 
     private readonly usersService: UsersService,
+
+    private readonly couponsService: CouponsService,
 
   ) {}
 
@@ -458,13 +462,28 @@ export class OrdersService {
 
     // Calculate total
 
-    const totalAmount = orderItems.reduce(
+    const cartTotalAmount = orderItems.reduce(
 
       (sum, item) => sum + item.price * item.quantity,
 
       0,
 
     );
+
+    // ── Coupon ("Have a Coupon?" at checkout) ───────────────────────────────
+    // Always re-validated server-side against this specific user's
+    // assignments — the coupon code is never trusted as-is. A rejected
+    // coupon fails checkout with the same messages the /customer/coupon
+    // endpoints return, so the FE can show one consistent error surface.
+    let couponPreview: Awaited<ReturnType<typeof this.couponsService.validateForUser>> | null = null;
+    if (checkoutContext.couponCode?.trim()) {
+      couponPreview = await this.couponsService.validateForUser(userId, {
+        couponCode: checkoutContext.couponCode,
+        orderAmount: cartTotalAmount,
+      });
+    }
+
+    const totalAmount = couponPreview ? couponPreview.finalAmount : cartTotalAmount;
 
 
 
@@ -594,6 +613,10 @@ export class OrdersService {
       // Seed status history with the initial placement event
 
       statusHistory: [{ status: OrderStatus.ORDER_PLACED, timestamp: new Date() }],
+
+      couponCode: couponPreview?.couponCode,
+      couponId: couponPreview?.couponId,
+      couponDiscountAmount: couponPreview?.discountAmount ?? 0,
 
     });
 

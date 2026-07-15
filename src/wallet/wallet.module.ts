@@ -11,6 +11,7 @@ import { Order, OrderSchema } from '../orders/schemas/order.schema';
 import { PaymentsModule } from '../payments/payments.module';
 import { AuthModule } from '../auth/auth.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { CouponsModule } from '../coupons/coupons.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     PaymentsModule,
     AuthModule,
     NotificationsModule,
+    CouponsModule,
   ],
   controllers: [WalletController],
   providers: [WalletService],
