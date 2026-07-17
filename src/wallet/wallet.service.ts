@@ -7,6 +7,7 @@ import {
   WalletTxnCategory,
   WalletTxnType,
   WalletTxnStatus,
+  VISIBLE_WALLET_TXN_STATUSES,
 } from './schemas/wallet-transaction.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
@@ -45,7 +46,7 @@ export class WalletService {
       .lean();
 
     const transactions = await this.txnModel
-      .find({ userId })
+      .find({ userId, status: { $in: VISIBLE_WALLET_TXN_STATUSES } })
       .sort({ createdAt: -1 })
       .limit(10)
       .lean();
@@ -58,9 +59,14 @@ export class WalletService {
 
   // ── GET /wallet/transactions ────────────────────────────────────────────────
 
+  // Pending transactions are an internal in-flight state (awaiting Razorpay
+  // callback/webhook) — they aren't a settled ledger entry yet, so they're
+  // excluded from every user-facing wallet view (list, "recent", and any
+  // future summary), not just this endpoint. Failed transactions ARE shown
+  // (per product decision) so users can see why a top-up didn't land.
   async getAllTransactions(userId: string) {
     const transactions = await this.txnModel
-      .find({ userId })
+      .find({ userId, status: { $in: VISIBLE_WALLET_TXN_STATUSES } })
       .sort({ createdAt: -1 })
       .lean();
 

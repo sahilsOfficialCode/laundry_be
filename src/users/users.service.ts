@@ -472,12 +472,19 @@ export class UsersService {
     }
 
     const addresses = user.addresses ?? [];
-    const removed = addresses.find((item) => item.id === addressId);
+    // Support matching by either the custom UUID `id` field or Mongoose's
+    // `_id`, same as updateAddress — legacy records saved before the UUID
+    // `id` field existed would otherwise never match and "delete" would
+    // silently no-op (throwing here instead) while the address kept
+    // appearing in every subsequent GET /user/addresses response.
+    const matches = (item: UserAddress) =>
+      item.id === addressId || (item as any)._id?.toString() === addressId;
+    const removed = addresses.find(matches);
     if (!removed) {
       throw new BadRequestException('Address not found');
     }
 
-    const remaining = addresses.filter((item) => item.id !== addressId);
+    const remaining = addresses.filter((item) => !matches(item));
     if (removed.isDefault && remaining.length > 0) {
       remaining[0] = { ...remaining[0], isDefault: true };
     }
@@ -496,14 +503,16 @@ export class UsersService {
     }
 
     const addresses = user.addresses ?? [];
-    const selected = addresses.find((item) => item.id === addressId);
+    const matches = (item: UserAddress) =>
+      item.id === addressId || (item as any)._id?.toString() === addressId;
+    const selected = addresses.find(matches);
     if (!selected) {
       throw new BadRequestException('Address not found');
     }
 
     user.addresses = addresses.map((item) => ({
       ...item,
-      isDefault: item.id === addressId,
+      isDefault: matches(item),
     }));
 
     await user.save();
