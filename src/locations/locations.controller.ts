@@ -128,22 +128,34 @@ export class LocationsController {
 
   /**
    * GET /locations/shops?latitude=&longitude=&date=&city=
-   * Public — returns nearby active shops ordered by distance.
+   * Public — returns active shops, ordered by distance when coordinates are
+   * given. latitude/longitude are optional: omitting both returns a
+   * name-sorted browse-all list (optionally narrowed by city) so a customer
+   * with no saved address and no GPS permission can still pick a branch.
    * Used by the "Drop at Shop" flow.
    */
   @Public()
   @Get('shops')
   async getNearbyShops(
-    @Query('latitude') latitude: string,
-    @Query('longitude') longitude: string,
-    @Query('date') date: string,
+    @Query('latitude') latitude?: string,
+    @Query('longitude') longitude?: string,
+    @Query('date') date?: string,
     @Query('city') city?: string,
   ) {
-    const lat = parseFloat(latitude);
-    const lng = parseFloat(longitude);
-    if (isNaN(lat) || isNaN(lng)) {
-      throw new BadRequestException('latitude and longitude are required');
+    const hasLat = latitude !== undefined && latitude !== '';
+    const hasLng = longitude !== undefined && longitude !== '';
+
+    let lat: number | undefined;
+    let lng: number | undefined;
+
+    if (hasLat || hasLng) {
+      lat = parseFloat(latitude!);
+      lng = parseFloat(longitude!);
+      if (isNaN(lat) || isNaN(lng)) {
+        throw new BadRequestException('latitude and longitude must both be valid numbers when provided');
+      }
     }
+
     return this.locationsService.getNearbyShops(lat, lng, date ?? new Date().toISOString().slice(0, 10), city);
   }
 

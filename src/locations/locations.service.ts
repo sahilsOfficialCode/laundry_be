@@ -71,7 +71,8 @@ type LocationEligibilityReason =
   | 'NO_PICKUP_SLOTS_AVAILABLE'
   | 'NO_DELIVERY_SLOTS_AVAILABLE'
   | 'DAILY_CAPACITY_REACHED'
-  | 'INSTANT_ORDERS_UNAVAILABLE';
+  | 'INSTANT_ORDERS_UNAVAILABLE'
+  | 'LOCATION_NOT_FOUND';
 
 export type LocationValidationMessage = {
   code: LocationEligibilityReason;
@@ -84,6 +85,24 @@ export type LocationResolutionResult = {
   reasons: LocationValidationMessage[];
   suggestions: any[];
 };
+
+/**
+ * How a location was arrived at for eligibility checking — controls whether
+ * the service-area/distance check applies, not just a loose boolean flag.
+ *
+ * AUTO_ASSIGN: the candidate came from resolveLocation's $geoNear scan (Home
+ * Pickup/Reception/Delivery) — distance from the customer's coordinates is a
+ * real eligibility requirement.
+ *
+ * DIRECT_SELECTION: the customer explicitly chose this exact location (Drop
+ * at Shop) or it's being listed in a coordinate-less browse-all context —
+ * distance is not applicable, every other check (active/open/slots/capacity)
+ * still is.
+ */
+export enum LocationAssignmentMode {
+  AUTO_ASSIGN = 'AUTO_ASSIGN',
+  DIRECT_SELECTION = 'DIRECT_SELECTION',
+}
 
 @Injectable()
 export class LocationsService implements OnModuleInit {
@@ -441,6 +460,68 @@ export class LocationsService implements OnModuleInit {
   }
 
   /**
+   * DIRECT_SELECTION assignment mode (Drop at Shop): confirms the branch the
+   * customer explicitly chose is usable (active, open, has slots, under
+   * capacity) — never a different, geographically-nearer one.
+   *
+   * INVARIANT: for a DIRECT_SELECTION order, the assigned location must
+   * always equal the customer-selected locationId. This method either
+   * returns that exact location or throws a typed { code, message } error
+   * naming the specific reason (LOCATION_NOT_FOUND / LOCATION_INACTIVE /
+   * DAILY_CAPACITY_REACHED / etc.) so the caller can send the customer back
+   * to branch selection. It must never silently substitute or fall back to
+   * a different location — do not add auto-reassignment logic here.
+   */
+  async validateSelectedLocation(
+    locationId: string,
+    params: {
+      requestedDate: string;
+      requestedTime?: string;
+      pickupSlot?: string;
+      deliverySlot?: string;
+    },
+  ) {
+    const location = await this.locationModel.findById(locationId).lean().exec();
+    if (!location) {
+      throw new BadRequestException({
+        code: 'LOCATION_NOT_FOUND',
+        message: 'Selected branch could not be found.',
+      });
+    }
+
+    const requestedDate = new Date(params.requestedDate);
+    const evaluated = await this.evaluateLocationEligibility(
+      location,
+      {
+        requestedTime: params.requestedTime,
+        pickupSlot: params.pickupSlot,
+        deliverySlot: params.deliverySlot,
+      },
+      requestedDate,
+      LocationAssignmentMode.DIRECT_SELECTION,
+    );
+
+    if (evaluated.reasons.length > 0) {
+      const reason = evaluated.reasons[0];
+      // Log-based analytics (see PaymentAlertsService for the same
+      // pattern) — no analytics SDK exists in this project yet; this is a
+      // grep-able line any log pipeline can aggregate by `code` to answer
+      // "how often is Drop-at-Shop blocked, and why" without new infra.
+      this.logger.warn(
+        JSON.stringify({
+          event: 'LOCATION_UNAVAILABLE',
+          code: reason.code,
+          locationId,
+          timestamp: new Date().toISOString(),
+        }),
+      );
+      throw new BadRequestException({ code: reason.code, message: reason.message });
+    }
+
+    return evaluated.location;
+  }
+
+  /**
    * Returns today's booking usage for a location:
    *   { limit, usedToday, remainingToday, isUnlimited }
    * Used by the admin panel to show capacity at a glance.
@@ -588,21 +669,26 @@ export class LocationsService implements OnModuleInit {
   }
 
   /**
-   * Returns a list of active shops near the given coordinates, ordered by
-   * distance. Used by the frontend's "Drop at Shop" flow.
+   * Returns a list of active shops, ordered by distance when coordinates are
+   * supplied. Used by the frontend's "Drop at Shop" flow.
+   *
+   * latitude/longitude are optional: a customer with no saved address and no
+   * GPS permission can still browse every active shop (sorted by name,
+   * optionally narrowed by city) and pick one directly — DIRECT_SELECTION
+   * assignment mode doesn't require distance at all, so shop *discovery*
+   * shouldn't either.
    */
   async getNearbyShops(
-    latitude: number,
-    longitude: number,
+    latitude: number | undefined,
+    longitude: number | undefined,
     date: string,
     city?: string,
   ) {
-    const candidates = await this.fetchNearestCandidates({
-      latitude,
-      longitude,
-      city,
-      requestedDate: date,
-    });
+    const hasCoordinates = latitude != null && longitude != null;
+
+    const candidates = hasCoordinates
+      ? await this.fetchNearestCandidates({ latitude, longitude, city, requestedDate: date })
+      : await this.fetchAllActiveCandidates(city);
 
     const requestedDate = new Date(date);
 
@@ -612,6 +698,9 @@ export class LocationsService implements OnModuleInit {
           loc,
           { latitude, longitude, requestedDate: date },
           requestedDate,
+          // No coordinates → browse-all listing, same "distance doesn't
+          // apply" reasoning as a DIRECT_SELECTION checkout.
+          hasCoordinates ? LocationAssignmentMode.AUTO_ASSIGN : LocationAssignmentMode.DIRECT_SELECTION,
         );
         const isOpen = eval_.reasons.every(
           (r) => r.code !== 'LOCATION_INACTIVE' &&
@@ -642,7 +731,23 @@ export class LocationsService implements OnModuleInit {
       }),
     );
 
-    return results.slice(0, 10);
+    return hasCoordinates
+      ? results.slice(0, 10)
+      : results.sort((a, b) => a.shop.shopName.localeCompare(b.shop.shopName)).slice(0, 40);
+  }
+
+  /** Browse-all fallback for getNearbyShops when no coordinates are supplied. */
+  private async fetchAllActiveCandidates(city?: string) {
+    const query: Record<string, any> = { isActive: true };
+    if (city?.trim()) {
+      query.city = new RegExp(`^${this.escapeRegex(city.trim())}$`, 'i');
+    }
+    return this.locationModel
+      .find(query)
+      .sort({ shopName: 1 })
+      .limit(40)
+      .lean()
+      .exec();
   }
 
   // ── Bulk import from JSON file ─────────────────────────────────────────────
@@ -949,8 +1054,9 @@ export class LocationsService implements OnModuleInit {
 
   private async evaluateLocationEligibility(
     candidate: any,
-    payload: ResolveLocationDto,
+    payload: Partial<ResolveLocationDto>,
     requestedDate: Date,
+    mode: LocationAssignmentMode = LocationAssignmentMode.AUTO_ASSIGN,
   ) {
     const reasons: LocationValidationMessage[] = [];
 
@@ -996,16 +1102,21 @@ export class LocationsService implements OnModuleInit {
       });
     }
 
-    const inServiceArea = this.isPointInsideServiceArea(
-      candidate,
-      payload.latitude,
-      payload.longitude,
-    );
-    if (!inServiceArea) {
-      reasons.push({
-        code: 'SERVICE_NOT_AVAILABLE_IN_AREA',
-        message: 'Service not available in your area',
-      });
+    // DIRECT_SELECTION (e.g. Drop at Shop) skips the distance check — the
+    // customer walked in and chose this exact branch, so distance from a
+    // pickup address is irrelevant; every other check here still applies.
+    if (mode === LocationAssignmentMode.AUTO_ASSIGN) {
+      const inServiceArea = this.isPointInsideServiceArea(
+        candidate,
+        payload.latitude!,
+        payload.longitude!,
+      );
+      if (!inServiceArea) {
+        reasons.push({
+          code: 'SERVICE_NOT_AVAILABLE_IN_AREA',
+          message: 'Service not available in your area',
+        });
+      }
     }
 
     // Instant orders stop being accepted after today's cutoff (see

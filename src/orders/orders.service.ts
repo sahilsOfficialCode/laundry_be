@@ -41,6 +41,8 @@ import {
   isInstantAvailable,
 } from '../common/instant-availability';
 
+import { isDropAtShopDirectSelectionEnabled } from '../common/feature-flags';
+
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 
 import { UpdateDeliveryDetailsDto } from './dto/update-delivery-details.dto';
@@ -223,17 +225,50 @@ export class OrdersService {
 
 
 
-    if (
+    const requestedDateForAssignment =
+
+      checkoutContext.pickupDate ?? new Date().toISOString();
+
+
+
+    // ── Location assignment: two explicit, non-overlapping modes ───────────
+    // DIRECT_SELECTION (Drop at Shop): the customer walked in and picked this
+    // exact branch — it is authoritative. Validated (active/open/slots/
+    // capacity) but never silently swapped for a different, "nearer" branch.
+    // AUTO_ASSIGN (Home Pickup/Reception/Delivery): unchanged — resolves the
+    // nearest eligible branch from the customer's address coordinates.
+    //
+    // INVARIANT: for a DIRECT_SELECTION order, order.locationId must equal
+    // the customer-selected locationId at every stage — here and afterward
+    // (status updates, delivery-detail edits, payment, retries). No code
+    // path may reassign it to a different location. If the selected branch
+    // becomes unusable, checkout must fail with a typed error instead of
+    // silently falling back to another branch.
+    if (checkoutContext.serviceType === PickupType.DROP_AT_SHOP && isDropAtShopDirectSelectionEnabled()) {
+
+      if (!preferredLocationId) {
+        throw new BadRequestException(
+          'Please select a branch to drop your laundry at.',
+        );
+      }
+
+      assignedLocation = await this.locationsService.validateSelectedLocation(
+        preferredLocationId,
+        {
+          requestedDate: requestedDateForAssignment,
+          requestedTime: checkoutContext.pickupTime,
+          pickupSlot: checkoutContext.pickupSlot,
+          deliverySlot: checkoutContext.deliverySlot,
+        },
+      );
+
+    } else if (
 
       checkoutContext.pickupLatitude != null &&
 
       checkoutContext.pickupLongitude != null
 
     ) {
-
-      const requestedDate =
-
-        checkoutContext.pickupDate ?? new Date().toISOString();
 
       assignedLocation = await this.locationsService.validateBookingEligibility(
 
@@ -247,7 +282,7 @@ export class OrdersService {
 
           preferredLocationId,
 
-          requestedDate,
+          requestedDate: requestedDateForAssignment,
 
           requestedTime: checkoutContext.pickupTime,
 
@@ -259,74 +294,6 @@ export class OrdersService {
 
       );
 
-
-
-      // ── Standard slot capacity check ─────────────────────────────────────────
-
-      // If the user selected a standard (admin-managed) pickup slot that has a
-
-      // capacity set, verify that slot still has room. This is a belt-and-
-
-      // suspenders check — the /standard-time-slots/available endpoint already
-
-      // hides full slots, but we re-validate at order creation to handle race
-
-      // conditions (two users booking the last spot at the same time).
-
-      if (
-
-        checkoutContext.pickupSlot &&
-
-        !OPEN_SLOT_LABELS.has(checkoutContext.pickupSlot.trim().toLowerCase())
-
-      ) {
-
-        const stdSlot = await this.standardSlotModel
-
-          .findOne({ label: checkoutContext.pickupSlot })
-
-          .lean()
-
-          .exec();
-
-
-
-        if (stdSlot && stdSlot.capacity && stdSlot.capacity > 0) {
-
-          const dateISO = new Date(requestedDate).toISOString().slice(0, 10);
-
-          const dayStart = new Date(dateISO + 'T00:00:00.000Z');
-
-          const dayEnd   = new Date(dateISO + 'T23:59:59.999Z');
-
-
-
-          const slotBookedCount = await this.orderModel.countDocuments({
-
-            pickupDate: { $gte: dayStart, $lte: dayEnd },
-
-            pickupSlot: checkoutContext.pickupSlot,
-
-            status: { $ne: OrderStatus.CANCELLED },
-
-          });
-
-
-
-          if (slotBookedCount >= stdSlot.capacity) {
-
-            throw new BadRequestException(
-
-              `The "${checkoutContext.pickupSlot}" slot is fully booked for today. Please choose a different slot.`,
-
-            );
-
-          }
-
-        }
-
-      }
-
     } else if (activeLocationCount > 0) {
 
       throw new BadRequestException(
@@ -334,6 +301,78 @@ export class OrdersService {
         'Service not available in your area. Please share pickup address coordinates.',
 
       );
+
+    }
+
+
+
+    // ── Standard slot capacity check ─────────────────────────────────────────
+
+    // If the user selected a standard (admin-managed) pickup slot that has a
+
+    // capacity set, verify that slot still has room. This is a belt-and-
+
+    // suspenders check — the /standard-time-slots/available endpoint already
+
+    // hides full slots, but we re-validate at order creation to handle race
+
+    // conditions (two users booking the last spot at the same time). Runs for
+
+    // both assignment modes — it's a global admin-slot check, not a geo one.
+
+    if (
+
+      assignedLocation &&
+
+      checkoutContext.pickupSlot &&
+
+      !OPEN_SLOT_LABELS.has(checkoutContext.pickupSlot.trim().toLowerCase())
+
+    ) {
+
+      const stdSlot = await this.standardSlotModel
+
+        .findOne({ label: checkoutContext.pickupSlot })
+
+        .lean()
+
+        .exec();
+
+
+
+      if (stdSlot && stdSlot.capacity && stdSlot.capacity > 0) {
+
+        const dateISO = new Date(requestedDateForAssignment).toISOString().slice(0, 10);
+
+        const dayStart = new Date(dateISO + 'T00:00:00.000Z');
+
+        const dayEnd   = new Date(dateISO + 'T23:59:59.999Z');
+
+
+
+        const slotBookedCount = await this.orderModel.countDocuments({
+
+          pickupDate: { $gte: dayStart, $lte: dayEnd },
+
+          pickupSlot: checkoutContext.pickupSlot,
+
+          status: { $ne: OrderStatus.CANCELLED },
+
+        });
+
+
+
+        if (slotBookedCount >= stdSlot.capacity) {
+
+          throw new BadRequestException(
+
+            `The "${checkoutContext.pickupSlot}" slot is fully booked for today. Please choose a different slot.`,
+
+          );
+
+        }
+
+      }
 
     }
 

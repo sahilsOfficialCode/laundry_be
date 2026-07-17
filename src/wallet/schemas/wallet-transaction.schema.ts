@@ -15,6 +15,16 @@ export enum WalletTxnStatus {
 }
 
 /**
+ * Statuses shown in user-facing wallet views (list, recent, summary).
+ * PENDING is an internal in-flight state (awaiting Razorpay callback/webhook)
+ * and is deliberately excluded everywhere this is used.
+ */
+export const VISIBLE_WALLET_TXN_STATUSES = [
+  WalletTxnStatus.COMPLETED,
+  WalletTxnStatus.FAILED,
+] as const;
+
+/**
  * Business category of a wallet movement. `type` (credit/debit) says which
  * direction money moved; `category` says WHY. Optional for backward
  * compatibility — rows written before this field existed have it null.
@@ -84,3 +94,9 @@ export const WalletTransactionSchema = SchemaFactory.createForClass(WalletTransa
 
 // Wallet history is always queried per-user, newest first.
 WalletTransactionSchema.index({ userId: 1, createdAt: -1 });
+
+// User-facing list/history queries always filter to VISIBLE_WALLET_TXN_STATUSES
+// on top of the per-user sort above — this compound index lets Mongo satisfy
+// the equality (userId) + range (status $in) + sort (createdAt) in one pass
+// instead of scanning the {userId, createdAt} index and filtering in memory.
+WalletTransactionSchema.index({ userId: 1, status: 1, createdAt: -1 });
