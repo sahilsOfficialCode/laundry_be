@@ -14,6 +14,10 @@ export class LaundryService {
   @Prop({ required: true })
   price!: number;
 
+  /** Unit label for quantity display in billing breakdowns, e.g. 'kg', 'pcs', 'pair'. Optional — services without it render bare quantity. */
+  @Prop({ required: false })
+  unit?: string;
+
   /** Shown to customers browsing/booking this service via the Instant (same-day) flow. */
   @Prop({ required: true })
   instantDescription!: string;

@@ -14,6 +14,10 @@ import {
   StandardTimeSlot,
   StandardTimeSlotSchema,
 } from '../standard-time-slots/schemas/standard-time-slot.schema';
+import {
+  WalletTransaction,
+  WalletTransactionSchema,
+} from '../wallet/schemas/wallet-transaction.schema';
 
 import { AuthModule } from '../auth/auth.module';
 import { LocationsModule } from '../locations/locations.module';
@@ -33,6 +37,7 @@ import { CouponsModule } from '../coupons/coupons.module';
       { name: Cart.name, schema: CartSchema },
       { name: LaundryService.name, schema: LaundryServiceSchema },
       { name: StandardTimeSlot.name, schema: StandardTimeSlotSchema },
+      { name: WalletTransaction.name, schema: WalletTransactionSchema },
     ]),
     AuthModule,
     LocationsModule,

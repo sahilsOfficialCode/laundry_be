@@ -98,7 +98,7 @@ export class Order {
 
 
 
-  @Prop({ type: [{ serviceId: String, serviceName: String, icon: String, quantity: Number, price: Number, category: String }] })
+  @Prop({ type: [{ serviceId: String, serviceName: String, icon: String, quantity: Number, price: Number, category: String, unit: String }] })
 
   items: {
 
@@ -115,6 +115,10 @@ export class Order {
     /** 'instant' | 'scheduled' — which type the user ordered */
 
     category?: string;
+
+    /** Unit label snapshotted from Service.unit at checkout time, e.g. 'kg', 'pcs', 'pair'. */
+
+    unit?: string;
 
   }[];
 

@@ -34,6 +34,20 @@ import {
 
 } from '../standard-time-slots/schemas/standard-time-slot.schema';
 
+import {
+
+  WalletTransaction,
+
+  WalletTransactionDocument,
+
+  WalletTxnCategory,
+
+  WalletTxnStatus,
+
+} from '../wallet/schemas/wallet-transaction.schema';
+
+import { buildBillingSummary } from './utils/billing-summary.util';
+
 import { CheckoutContextDto } from './dto/checkout-context.dto';
 
 import {
@@ -104,6 +118,12 @@ export class OrdersService {
     @InjectModel(StandardTimeSlot.name)
 
     private standardSlotModel: Model<StandardTimeSlotDocument>,
+
+
+
+    @InjectModel(WalletTransaction.name)
+
+    private walletTxnModel: Model<WalletTransactionDocument>,
 
 
 
@@ -435,6 +455,8 @@ export class OrdersService {
           quantity: item.quantity,
 
           price: service.price,
+
+          unit: service.unit,
 
           category: (item as any).category ?? 'instant',
 
@@ -976,6 +998,25 @@ export class OrdersService {
     return Math.round(discount * 100) / 100;
   }
 
+  /**
+   * A completed WALLET PAYMENT txn can only exist for an order whose
+   * paymentStatus is COMPLETED (wallet.service.ts only creates it after the
+   * findOneAndUpdate that flips paymentStatus succeeds) — skip the query
+   * entirely otherwise, so this stays a single conditional lookup rather
+   * than an unconditional one on every order-detail fetch.
+   */
+  private async getWalletDebitAmount(order: OrderDocument): Promise<number | undefined> {
+    if (order.paymentStatus !== PaymentStatus.COMPLETED) return undefined;
+    const txn = await this.walletTxnModel
+      .findOne({
+        referenceOrderId: String(order._id),
+        category: WalletTxnCategory.PAYMENT,
+        status: WalletTxnStatus.COMPLETED,
+      })
+      .lean();
+    return txn?.amount;
+  }
+
   // Get single order (owner only)
 
   async findById(orderId: string, userId: string) {
@@ -984,7 +1025,13 @@ export class OrdersService {
 
     if (!order) throw new NotFoundException('Order not found');
 
-    return order;
+    const walletDebitAmount = await this.getWalletDebitAmount(order);
+
+    const plain: any = order.toObject();
+
+    plain.billingSummary = buildBillingSummary(plain, walletDebitAmount);
+
+    return plain;
 
   }
 
@@ -998,7 +1045,11 @@ export class OrdersService {
 
     if (!order) throw new NotFoundException('Order not found');
 
+    const walletDebitAmount = await this.getWalletDebitAmount(order);
+
     const [withInfo] = await this.attachCustomerInfo([order]);
+
+    withInfo.billingSummary = buildBillingSummary(withInfo, walletDebitAmount);
 
     return withInfo;
 

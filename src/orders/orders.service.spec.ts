@@ -2,10 +2,11 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { BadRequestException } from '@nestjs/common';
 import { OrdersService } from './orders.service';
-import { Order, DeliveryType, PickupType } from './schemas/order.schema';
+import { Order, DeliveryType, PickupType, PaymentStatus } from './schemas/order.schema';
 import { Cart } from '../cart/schemas/cart.schema';
 import { LaundryService } from '../services/schemas/service.schema';
 import { StandardTimeSlot } from '../standard-time-slots/schemas/standard-time-slot.schema';
+import { WalletTransaction, WalletTxnCategory, WalletTxnStatus } from '../wallet/schemas/wallet-transaction.schema';
 import { LocationsService } from '../locations/locations.service';
 import { Location } from '../locations/schemas/location.schema';
 import { LocationClosure } from '../locations/schemas/location-closure.schema';
@@ -36,6 +37,7 @@ describe('OrdersService', () => {
         { provide: getModelToken(Cart.name), useValue: {} },
         { provide: getModelToken(LaundryService.name), useValue: {} },
         { provide: getModelToken(StandardTimeSlot.name), useValue: {} },
+        { provide: getModelToken(WalletTransaction.name), useValue: {} },
         {
           provide: LocationsService,
           useValue: {
@@ -131,6 +133,7 @@ describe('OrdersService — checkout delivery-date computation', () => {
           provide: getModelToken(StandardTimeSlot.name),
           useValue: { findOne: jest.fn() },
         },
+        { provide: getModelToken(WalletTransaction.name), useValue: {} },
         {
           provide: LocationsService,
           useValue: {
@@ -350,6 +353,7 @@ describe('OrdersService — DIRECT_SELECTION (Drop at Shop) location assignment'
           },
         },
         { provide: getModelToken(StandardTimeSlot.name), useValue: { findOne: jest.fn() } },
+        { provide: getModelToken(WalletTransaction.name), useValue: {} },
         {
           provide: LocationsService,
           useValue: {
@@ -538,6 +542,7 @@ describe('OrdersService + LocationsService — integration (location assignment)
           useValue: { findById: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(mockService) }) },
         },
         { provide: getModelToken(StandardTimeSlot.name), useValue: { findOne: jest.fn() } },
+        { provide: getModelToken(WalletTransaction.name), useValue: {} },
         { provide: getModelToken(Location.name), useValue: locationModel },
         {
           provide: getModelToken(LocationClosure.name),
@@ -808,6 +813,7 @@ describe('OrdersService — findAssignedToPartner customer contact exposure', ()
         { provide: getModelToken(Cart.name), useValue: {} },
         { provide: getModelToken(LaundryService.name), useValue: {} },
         { provide: getModelToken(StandardTimeSlot.name), useValue: {} },
+        { provide: getModelToken(WalletTransaction.name), useValue: {} },
         { provide: LocationsService, useValue: {} },
         { provide: ServiceZonesService, useValue: {} },
         { provide: NotificationsService, useValue: {} },
@@ -850,5 +856,115 @@ describe('OrdersService — findAssignedToPartner customer contact exposure', ()
     expect(serialized.toLowerCase()).not.toContain('leaked');
     expect(serialized.toLowerCase()).not.toContain('should never appear');
     expect(Object.keys(result.active[0].customer).sort()).toEqual(['address', 'name', 'phone']);
+  });
+});
+
+describe('OrdersService — findById/findByIdAdmin billingSummary', () => {
+  function makeOrderDoc(fields: Record<string, any>) {
+    return {
+      ...fields,
+      toObject() {
+        const { toObject, ...rest } = this;
+        return rest;
+      },
+    };
+  }
+
+  async function buildService(opts: {
+    order: Record<string, any>;
+    walletFindOne?: jest.Mock;
+    findNamesByIds?: jest.Mock;
+  }) {
+    const orderDoc = makeOrderDoc(opts.order);
+    const orderModel: any = {
+      findOne: jest.fn().mockResolvedValue(orderDoc),
+      findById: jest.fn().mockResolvedValue(orderDoc),
+    };
+    const walletTxnModel: any = {
+      findOne: opts.walletFindOne ?? jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(null) }),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrdersService,
+        { provide: getModelToken(Order.name), useValue: orderModel },
+        { provide: getModelToken(Cart.name), useValue: {} },
+        { provide: getModelToken(LaundryService.name), useValue: {} },
+        { provide: getModelToken(StandardTimeSlot.name), useValue: {} },
+        { provide: getModelToken(WalletTransaction.name), useValue: walletTxnModel },
+        { provide: LocationsService, useValue: {} },
+        { provide: ServiceZonesService, useValue: {} },
+        { provide: NotificationsService, useValue: {} },
+        { provide: SupportEventsService, useValue: {} },
+        { provide: UploadService, useValue: {} },
+        { provide: ClothTypesService, useValue: {} },
+        { provide: ReferralService, useValue: {} },
+        { provide: UsersService, useValue: { findNamesByIds: opts.findNamesByIds ?? jest.fn().mockResolvedValue(new Map()) } },
+        { provide: CouponsService, useValue: {} },
+      ],
+    }).compile();
+
+    return { service: module.get<OrdersService>(OrdersService), walletTxnModel };
+  }
+
+  const baseOrder = {
+    _id: 'order-1',
+    userId: 'user-1',
+    paymentStatus: PaymentStatus.PENDING,
+    items: [{ serviceId: 'service-1', serviceName: 'Wash & Fold', quantity: 5, price: 50, unit: 'kg' }],
+    totalAmount: 250,
+  };
+
+  it('findById attaches billingSummary.lineItems built from the order', async () => {
+    const { service } = await buildService({ order: { ...baseOrder } });
+
+    const result = await service.findById('order-1', 'user-1');
+
+    expect(result.billingSummary.lineItems).toEqual([
+      { type: 'SERVICE', label: 'Wash & Fold', amount: 250, quantity: 5, unit: 'kg', serviceId: 'service-1', unitPrice: 50 },
+      { type: 'SUBTOTAL', label: 'Subtotal', amount: 250 },
+      { type: 'TOTAL', label: 'Total', amount: 250 },
+    ]);
+  });
+
+  it('skips the wallet lookup entirely when paymentStatus is not COMPLETED', async () => {
+    const { service, walletTxnModel } = await buildService({
+      order: { ...baseOrder, paymentStatus: PaymentStatus.PENDING },
+    });
+
+    await service.findById('order-1', 'user-1');
+
+    expect(walletTxnModel.findOne).not.toHaveBeenCalled();
+  });
+
+  it('adds a WALLET line item equal to the found wallet debit when paymentStatus is COMPLETED', async () => {
+    const walletFindOne = jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ amount: 250 }) });
+    const { service } = await buildService({
+      order: { ...baseOrder, paymentStatus: PaymentStatus.COMPLETED, billAmount: 250 },
+      walletFindOne,
+    });
+
+    const result = await service.findById('order-1', 'user-1');
+
+    expect(walletFindOne).toHaveBeenCalledWith({
+      referenceOrderId: 'order-1',
+      category: WalletTxnCategory.PAYMENT,
+      status: WalletTxnStatus.COMPLETED,
+    });
+    expect(result.billingSummary.lineItems).toContainEqual({ type: 'WALLET', label: 'Paid via Wallet', amount: 250 });
+  });
+
+  it('findByIdAdmin attaches billingSummary alongside the customer-info fields', async () => {
+    const { service } = await buildService({
+      order: { ...baseOrder },
+      findNamesByIds: jest.fn().mockResolvedValue(new Map([['user-1', { name: 'Asha Rao', mobileNumber: '9000000001' }]])),
+    });
+
+    const result = await service.findByIdAdmin('order-1');
+
+    expect(result.customerName).toBe('Asha Rao');
+    expect(result.billingSummary.lineItems).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'TOTAL', amount: 250 })]),
+    );
   });
 });

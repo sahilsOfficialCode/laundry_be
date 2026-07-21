@@ -23,6 +23,10 @@ export class UpdateServiceDto {
 
   @IsOptional()
   @IsString()
+  unit?: string;
+
+  @IsOptional()
+  @IsString()
   @IsNotEmpty()
   instantDescription?: string;
 

@@ -8,6 +8,10 @@ export class CreateServiceDto {
   @Min(0)
   price?: number;
 
+  @IsOptional()
+  @IsString()
+  unit?: string;
+
   @IsString()
   @IsNotEmpty()
   instantDescription?: string;
