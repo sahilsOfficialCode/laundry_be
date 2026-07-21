@@ -213,6 +213,20 @@ export class UsersService {
   }
 
   /**
+   * Finds user ids whose name or mobile number matches the given regex —
+   * used by admin order search to resolve a customer name/phone query into
+   * userIds before filtering the Orders collection (customerName/phone
+   * aren't stored on Order documents, see attachCustomerInfo).
+   */
+  async findIdsByNameOrMobile(regex: RegExp): Promise<string[]> {
+    const users = await this.userModel
+      .find({ $or: [{ name: regex }, { mobileNumber: regex }] })
+      .select('_id')
+      .limit(10);
+    return users.map((u) => String(u._id));
+  }
+
+  /**
    * Lightweight status lookup used by JwtAuthGuard on each request to enforce
    * account deletion / "logout from every device". Returns only the few fields
    * needed so it stays cheap (indexed _id lookup, lean).

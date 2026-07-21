@@ -19,7 +19,7 @@ import { memoryStorage } from 'multer';
 
 import { OrdersService, OrderPhotoType } from './orders.service';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
-import { OrderStatus } from './schemas/order.schema';
+import { ListOrdersQueryDto } from './dto/list-orders-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -40,14 +40,9 @@ export class OrdersController {
 
   @Get()
   @Roles(UserRole.ADMIN)
-  async getAllOrders(
-    @Query('page')      page:      number   = 1,
-    @Query('limit')     limit:     number   = 10,
-    @Query('status')    status?:   OrderStatus,
-    @Query('sortField') sortField?: string,
-    @Query('sortDir')   sortDir?:  'asc' | 'desc',
-  ) {
-    return this.ordersService.findAll(page, limit, status, sortField, sortDir);
+  async getAllOrders(@Query() query: ListOrdersQueryDto) {
+    const { page = 1, limit = 10, status, sortField, sortDir, search } = query;
+    return this.ordersService.findAll(page, limit, status, sortField, sortDir, search);
   }
 
   @Get('my')
