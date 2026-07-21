@@ -836,11 +836,26 @@ export class OrdersService {
 
     sortDir: 'asc' | 'desc' = 'desc',
 
+    search?: string,
+
   ) {
 
     const skip   = (page - 1) * limit;
 
-    const filter = status ? { status } : {};
+    const filter: Record<string, any> = status ? { status } : {};
+
+
+
+    // Global search across orderNumber (Order-side) and customer name /
+    // mobile number (User-side — not stored on Order, so resolve matching
+    // userIds first). This runs before pagination so results are correct
+    // across the whole dataset, not just the currently loaded page.
+    const trimmedSearch = search?.trim();
+    if (trimmedSearch) {
+      const regex = new RegExp(this.escapeRegex(trimmedSearch), 'i');
+      const matchedUserIds = await this.usersService.findIdsByNameOrMobile(regex);
+      filter.$or = [{ orderNumber: regex }, { userId: { $in: matchedUserIds } }];
+    }
 
 
 
@@ -870,6 +885,12 @@ export class OrdersService {
 
     return { data, total, page, limit };
 
+  }
+
+
+
+  private escapeRegex(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
 
