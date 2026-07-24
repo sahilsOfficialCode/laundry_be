@@ -13,6 +13,7 @@ import { ReconciliationService } from './reconciliation.service';
 import { PaymentMetricsService } from './payment-metrics.service';
 import { PaymentAlertsService } from './payment-alerts.service';
 import { CouponsModule } from '../coupons/coupons.module';
+import { InvoicesModule } from '../invoices/invoices.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { CouponsModule } from '../coupons/coupons.module';
     AuthModule,
     NotificationsModule,
     CouponsModule,
+    InvoicesModule,
   ],
   providers: [
     PaymentsService,

@@ -431,6 +431,42 @@ export class Order {
 
   calculatedAmount?: number;
 
+  // ── Pricing engine breakdown (additive — absent on orders placed before
+  // this field existed; both frontends must fall back to the legacy
+  // totalAmount/billAmount-only display when these are undefined) ──────────
+
+  /** Id of the most recent OrderPricingSnapshot produced for this order. */
+  @Prop({ required: false })
+  latestPricingSnapshotId?: string;
+
+  /** GST amount included in the current total/bill. */
+  @Prop({ required: false, default: 0 })
+  taxAmount?: number;
+
+  /** Delivery fee included in the current total/bill (0 if order qualifies for free delivery). */
+  @Prop({ required: false, default: 0 })
+  deliveryFee?: number;
+
+  /** Flat platform fee included in the current total/bill. */
+  @Prop({ required: false, default: 0 })
+  platformFee?: number;
+
+  /** Flat payment-convenience fee included in the current total/bill. */
+  @Prop({ required: false, default: 0 })
+  convenienceFee?: number;
+
+  /** Flat packaging fee included in the current total/bill. */
+  @Prop({ required: false, default: 0 })
+  packagingFee?: number;
+
+  /** Wallet amount deducted from this order's payable total, if any. */
+  @Prop({ required: false, default: 0 })
+  walletDeductionAmount?: number;
+
+  /** True once an admin has overridden the engine-calculated bill amount (see PriceAdjustmentLog for the audit trail). */
+  @Prop({ required: false, default: false })
+  isManuallyAdjusted?: boolean;
+
 
 
   // ── Out-for-delivery live tracking ─────────────────────────────────────────

@@ -25,6 +25,7 @@ import { ClothTypesModule } from '../cloth-types/cloth-types.module';
 import { ReferralModule } from '../referrals/referral.module';
 import { UsersModule } from '../users/users.module';
 import { CouponsModule } from '../coupons/coupons.module';
+import { PricingModule } from '../pricing/pricing.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { CouponsModule } from '../coupons/coupons.module';
     ReferralModule,
     UsersModule,
     CouponsModule,
+    PricingModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService],

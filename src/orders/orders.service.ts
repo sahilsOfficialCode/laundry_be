@@ -65,6 +65,8 @@ import { UsersService } from '../users/users.service';
 
 import { CouponsService } from '../coupons/services/coupons.service';
 
+import { PricingService, PricingSnapshotReason } from '../pricing/pricing.service';
+
 
 
 export type OrderPhotoType = 'damage' | 'weighing';
@@ -124,6 +126,8 @@ export class OrdersService {
     private readonly usersService: UsersService,
 
     private readonly couponsService: CouponsService,
+
+    private readonly pricingService: PricingService,
 
   ) {}
 
@@ -522,7 +526,23 @@ export class OrdersService {
       });
     }
 
-    const totalAmount = couponPreview ? couponPreview.finalAmount : cartTotalAmount;
+    // ── Centralized pricing engine ──────────────────────────────────────────
+    // Every figure that ends up on the order (tax/delivery/fees/discounts/
+    // total) is produced by PricingService so there's one audit trail and one
+    // place that knows how to turn line items into a payable total — never
+    // computed ad hoc here or trusted from the client.
+    const pricingConfig = await this.pricingService.getConfig();
+    const checkoutDeliveryType = checkoutContext.deliveryType ?? DeliveryType.HOME_DELIVERY;
+    const pricingBreakdown = this.pricingService.compute({
+      itemsSubtotal: cartTotalAmount,
+      applyDeliveryFee: checkoutDeliveryType === DeliveryType.HOME_DELIVERY,
+      discounts: couponPreview
+        ? [{ label: `Coupon (${couponPreview.couponCode})`, amount: couponPreview.discountAmount, source: 'coupon' }]
+        : [],
+      config: pricingConfig,
+    });
+
+    const totalAmount = pricingBreakdown.payableTotal;
 
 
 
@@ -662,11 +682,31 @@ export class OrdersService {
       couponId: couponPreview?.couponId,
       couponDiscountAmount: couponPreview?.discountAmount ?? 0,
 
+      taxAmount: pricingBreakdown.taxAmount,
+      deliveryFee: pricingBreakdown.deliveryFee,
+      platformFee: pricingBreakdown.platformFee,
+      convenienceFee: pricingBreakdown.convenienceFee,
+      packagingFee: pricingBreakdown.packagingFee,
+
     });
 
 
 
     const savedOrder = await order.save();
+
+    // Immutable pricing snapshot for this checkout estimate — failures here
+    // must never fail checkout itself, since the order has already been placed.
+    try {
+      const snapshot = await this.pricingService.recordSnapshot(
+        String(savedOrder._id),
+        PricingSnapshotReason.ORDER_ESTIMATE,
+        pricingBreakdown,
+      );
+      savedOrder.latestPricingSnapshotId = String(snapshot._id);
+      await savedOrder.save();
+    } catch (e) {
+      // swallow — pricing snapshot is an audit-trail nicety, not a checkout blocker
+    }
 
 
 
@@ -1029,7 +1069,11 @@ export class OrdersService {
 
   // ADMIN: Update status with optional tracking fields
 
-  async updateStatus(orderId: string, dto: UpdateOrderStatusDto) {
+  async updateStatus(
+    orderId: string,
+    dto: UpdateOrderStatusDto,
+    actor?: { adminId: string; ip?: string },
+  ) {
 
     const order = await this.orderModel.findById(orderId);
 
@@ -1122,18 +1166,94 @@ export class OrdersService {
         order.clothTypeBreakdown = clothBreakdownWithCalc;
         order.calculatedAmount = calculatedAmount;
 
-        // Billing rules: use only current request values
-        if (dto.billAmount != null) {
-          order.billAmount = dto.billAmount;
-        } else {
-          order.billAmount = calculatedAmount;
+        // ── Billing: always goes through the pricing engine ─────────────────
+        // dto.billAmount differing from calculatedAmount is a manual admin
+        // override — it requires a reason and always produces an immutable
+        // snapshot + PriceAdjustmentLog entry (never a silent overwrite).
+        const isOverride = dto.billAmount != null && dto.billAmount !== calculatedAmount;
+        if (isOverride && !dto.overrideReason?.trim()) {
+          throw new BadRequestException(
+            'A reason is required when the bill amount differs from the calculated amount.',
+          );
+        }
+
+        const pricingConfig = await this.pricingService.getConfig();
+        const breakdown = this.pricingService.compute({
+          itemsSubtotal: calculatedAmount,
+          applyDeliveryFee: false,
+          config: pricingConfig,
+          manualOverride: isOverride
+            ? { amount: dto.billAmount!, reason: dto.overrideReason!.trim() }
+            : undefined,
+        });
+
+        order.billAmount = breakdown.payableTotal;
+        order.taxAmount = breakdown.taxAmount;
+        order.deliveryFee = breakdown.deliveryFee;
+        order.platformFee = breakdown.platformFee;
+        order.convenienceFee = breakdown.convenienceFee;
+        order.packagingFee = breakdown.packagingFee;
+
+        const snapshot = await this.pricingService.recordSnapshot(
+          orderId,
+          isOverride ? PricingSnapshotReason.ADMIN_OVERRIDE : PricingSnapshotReason.ITEMIZED,
+          breakdown,
+          isOverride ? actor?.adminId : undefined,
+        );
+        order.latestPricingSnapshotId = String(snapshot._id);
+
+        if (isOverride) {
+          order.isManuallyAdjusted = true;
+
+          const diffPercent =
+            calculatedAmount > 0
+              ? (Math.abs(dto.billAmount! - calculatedAmount) / calculatedAmount) * 100
+              : 100;
+          if (diffPercent > pricingConfig.maxOverridePercent) {
+            order.needsManualReview = true;
+            order.needsManualReviewReason = `Admin price override of ${diffPercent.toFixed(1)}% exceeds the ${pricingConfig.maxOverridePercent}% threshold — flagged for review`;
+          }
+
+          if (actor?.adminId) {
+            this.pricingService
+              .recordAdjustment({
+                orderId,
+                previousAmount: calculatedAmount,
+                newAmount: dto.billAmount!,
+                reason: dto.overrideReason!.trim(),
+                adminId: actor.adminId,
+                ipAddress: actor.ip,
+              })
+              .catch(() => { /* swallow — audit log failure must not block the status update */ });
+          }
         }
       } else {
-        // Original validation if no cloth breakdown
+        // Original validation if no cloth breakdown — no calculated baseline
+        // exists in this legacy path, so dto.billAmount is trusted as-is
+        // (same as before), just routed through the engine for consistent
+        // tax/fee fields and an audit snapshot.
         if (dto.billAmount == null || dto.billAmount <= 0) {
           throw new BadRequestException('Bill amount is required and must be greater than 0 when itemizing an order.');
         }
-        order.billAmount = dto.billAmount;
+        const pricingConfig = await this.pricingService.getConfig();
+        const breakdown = this.pricingService.compute({
+          itemsSubtotal: dto.billAmount,
+          applyDeliveryFee: false,
+          config: pricingConfig,
+        });
+        order.billAmount = breakdown.payableTotal;
+        order.taxAmount = breakdown.taxAmount;
+        order.deliveryFee = breakdown.deliveryFee;
+        order.platformFee = breakdown.platformFee;
+        order.convenienceFee = breakdown.convenienceFee;
+        order.packagingFee = breakdown.packagingFee;
+
+        const snapshot = await this.pricingService.recordSnapshot(
+          orderId,
+          PricingSnapshotReason.ITEMIZED,
+          breakdown,
+        );
+        order.latestPricingSnapshotId = String(snapshot._id);
       }
 
       // First-order discount — applied once the real bill is known so the
@@ -1296,6 +1416,20 @@ export class OrdersService {
   }
 
 
+
+  /** ADMIN: full pricing-snapshot history for an order (billing transparency + audit). */
+  async getPricingSnapshots(orderId: string) {
+    const order = await this.orderModel.findById(orderId).select('_id');
+    if (!order) throw new NotFoundException('Order not found');
+    return this.pricingService.getSnapshotsForOrder(orderId);
+  }
+
+  /** ADMIN: price-override audit trail for an order (who changed the bill, from what, to what, why). */
+  async getPriceAdjustments(orderId: string) {
+    const order = await this.orderModel.findById(orderId).select('_id');
+    if (!order) throw new NotFoundException('Order not found');
+    return this.pricingService.getAdjustmentsForOrder(orderId);
+  }
 
   // ── ADMIN: Order photos (damage findings / weighing proof) ────────────────
 

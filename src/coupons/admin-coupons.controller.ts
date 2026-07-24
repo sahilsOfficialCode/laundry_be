@@ -29,6 +29,7 @@ import { AssignUsersDto } from './dto/assign-users.dto';
 import { BulkAssignDto } from './dto/bulk-assign.dto';
 import { RemoveUserDto } from './dto/remove-user.dto';
 import { CouponStatus } from './enums/coupon.enums';
+import { getClientIp } from '../common/utils/get-client-ip.util';
 
 /**
  * Admin coupon management — Marketing > Coupons. Every route requires the
@@ -56,7 +57,7 @@ export class AdminCouponsController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@GetUser() admin: any, @Req() req: Request, @Body() dto: CreateCouponDto) {
-    return this.service.create(dto, { adminId: admin.sub, ip: this.getClientIp(req) });
+    return this.service.create(dto, { adminId: admin.sub, ip: getClientIp(req) });
   }
 
   /** GET /admin/coupons */
@@ -74,25 +75,25 @@ export class AdminCouponsController {
   /** PUT /admin/coupons/:id */
   @Put(':id')
   update(@GetUser() admin: any, @Req() req: Request, @Param('id') id: string, @Body() dto: UpdateCouponDto) {
-    return this.service.update(id, dto, { adminId: admin.sub, ip: this.getClientIp(req) });
+    return this.service.update(id, dto, { adminId: admin.sub, ip: getClientIp(req) });
   }
 
   /** PATCH /admin/coupons/:id/disable */
   @Patch(':id/disable')
   disable(@GetUser() admin: any, @Req() req: Request, @Param('id') id: string) {
-    return this.service.setStatus(id, CouponStatus.DISABLED, { adminId: admin.sub, ip: this.getClientIp(req) });
+    return this.service.setStatus(id, CouponStatus.DISABLED, { adminId: admin.sub, ip: getClientIp(req) });
   }
 
   /** PATCH /admin/coupons/:id/enable */
   @Patch(':id/enable')
   enable(@GetUser() admin: any, @Req() req: Request, @Param('id') id: string) {
-    return this.service.setStatus(id, CouponStatus.ACTIVE, { adminId: admin.sub, ip: this.getClientIp(req) });
+    return this.service.setStatus(id, CouponStatus.ACTIVE, { adminId: admin.sub, ip: getClientIp(req) });
   }
 
   /** DELETE /admin/coupons/:id — soft delete. */
   @Delete(':id')
   remove(@GetUser() admin: any, @Req() req: Request, @Param('id') id: string) {
-    return this.service.softDelete(id, { adminId: admin.sub, ip: this.getClientIp(req) });
+    return this.service.softDelete(id, { adminId: admin.sub, ip: getClientIp(req) });
   }
 
   // ── Assignment ───────────────────────────────────────────────────────────
@@ -101,28 +102,28 @@ export class AdminCouponsController {
   @Post(':id/assign-users')
   @HttpCode(HttpStatus.OK)
   assignUsers(@GetUser() admin: any, @Req() req: Request, @Param('id') id: string, @Body() dto: AssignUsersDto) {
-    return this.service.assignUsersManual(id, dto, { adminId: admin.sub, ip: this.getClientIp(req) });
+    return this.service.assignUsersManual(id, dto, { adminId: admin.sub, ip: getClientIp(req) });
   }
 
   /** POST /admin/coupons/:id/bulk-assign — condition-based bulk selection. */
   @Post(':id/bulk-assign')
   @HttpCode(HttpStatus.OK)
   bulkAssign(@GetUser() admin: any, @Req() req: Request, @Param('id') id: string, @Body() dto: BulkAssignDto) {
-    return this.service.bulkAssign(id, dto, { adminId: admin.sub, ip: this.getClientIp(req) });
+    return this.service.bulkAssign(id, dto, { adminId: admin.sub, ip: getClientIp(req) });
   }
 
   /** POST /admin/coupons/:id/remove-user */
   @Post(':id/remove-user')
   @HttpCode(HttpStatus.OK)
   removeUser(@GetUser() admin: any, @Req() req: Request, @Param('id') id: string, @Body() dto: RemoveUserDto) {
-    return this.service.removeUser(id, dto.userId, { adminId: admin.sub, ip: this.getClientIp(req) });
+    return this.service.removeUser(id, dto.userId, { adminId: admin.sub, ip: getClientIp(req) });
   }
 
   /** POST /admin/coupons/:id/reassign-user */
   @Post(':id/reassign-user')
   @HttpCode(HttpStatus.OK)
   reassignUser(@GetUser() admin: any, @Req() req: Request, @Param('id') id: string, @Body() dto: RemoveUserDto) {
-    return this.service.reassignUser(id, dto.userId, { adminId: admin.sub, ip: this.getClientIp(req) });
+    return this.service.reassignUser(id, dto.userId, { adminId: admin.sub, ip: getClientIp(req) });
   }
 
   /** GET /admin/coupons/:id/users — paginated, searchable assigned-user table. */
@@ -152,13 +153,5 @@ export class AdminCouponsController {
   @Get(':id/audit-logs')
   auditLogs(@Param('id') id: string, @Query('page') page?: string, @Query('limit') limit?: string) {
     return this.service.auditLogs(id, page ? Number(page) : 1, limit ? Number(limit) : 50);
-  }
-
-  private getClientIp(req: Request): string | undefined {
-    const fwd = req.headers['x-forwarded-for'];
-    if (typeof fwd === 'string' && fwd.length > 0) {
-      return fwd.split(',')[0].trim() || req.ip || undefined;
-    }
-    return req.ip || undefined;
   }
 }

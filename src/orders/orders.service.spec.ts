@@ -18,7 +18,31 @@ import { ClothTypesService } from '../cloth-types/cloth-types.service';
 import { ReferralService } from '../referrals/services/referral.service';
 import { UsersService } from '../users/users.service';
 import { CouponsService } from '../coupons/services/coupons.service';
+import { PricingService, computeBreakdown } from '../pricing/pricing.service';
 import { isInstantAvailable } from '../common/instant-availability';
+
+/** Zeroed config — matches production defaults, so checkout/itemization totals in these pre-existing tests are unaffected by the pricing engine. */
+const ZERO_PRICING_CONFIG = {
+  taxRatePercent: 0,
+  deliveryFeeAmount: 0,
+  freeDeliveryThreshold: 249,
+  platformFeeAmount: 0,
+  convenienceFeeAmount: 0,
+  packagingFeeAmount: 0,
+  maxOverridePercent: 30,
+};
+
+function mockPricingService() {
+  return {
+    getConfig: jest.fn().mockResolvedValue(ZERO_PRICING_CONFIG),
+    compute: jest.fn().mockImplementation((input: any) => computeBreakdown(input)),
+    recordSnapshot: jest.fn().mockResolvedValue({ _id: 'snapshot-1' }),
+    recordAdjustment: jest.fn().mockResolvedValue({ _id: 'adjustment-1' }),
+    getLatestSnapshot: jest.fn().mockResolvedValue(null),
+    getSnapshotsForOrder: jest.fn().mockResolvedValue([]),
+    getAdjustmentsForOrder: jest.fn().mockResolvedValue([]),
+  };
+}
 
 jest.mock('../common/instant-availability', () => ({
   ...jest.requireActual('../common/instant-availability'),
@@ -51,6 +75,7 @@ describe('OrdersService', () => {
         { provide: ReferralService, useValue: {} },
         { provide: UsersService, useValue: {} },
         { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: mockPricingService() },
       ],
     }).compile();
 
@@ -159,6 +184,7 @@ describe('OrdersService — checkout delivery-date computation', () => {
         { provide: ReferralService, useValue: {} },
         { provide: UsersService, useValue: {} },
         { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: mockPricingService() },
       ],
     }).compile();
 
@@ -376,6 +402,7 @@ describe('OrdersService — DIRECT_SELECTION (Drop at Shop) location assignment'
         { provide: ReferralService, useValue: {} },
         { provide: UsersService, useValue: {} },
         { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: mockPricingService() },
       ],
     }).compile();
 
@@ -566,6 +593,7 @@ describe('OrdersService + LocationsService — integration (location assignment)
         { provide: ReferralService, useValue: {} },
         { provide: UsersService, useValue: {} },
         { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: mockPricingService() },
       ],
     }).compile();
 
@@ -817,6 +845,7 @@ describe('OrdersService — findAssignedToPartner customer contact exposure', ()
         { provide: ReferralService, useValue: {} },
         { provide: UsersService, useValue: { findNamesByIds } },
         { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: mockPricingService() },
       ],
     }).compile();
 
@@ -850,5 +879,155 @@ describe('OrdersService — findAssignedToPartner customer contact exposure', ()
     expect(serialized.toLowerCase()).not.toContain('leaked');
     expect(serialized.toLowerCase()).not.toContain('should never appear');
     expect(Object.keys(result.active[0].customer).sort()).toEqual(['address', 'name', 'phone']);
+  });
+});
+
+describe('OrdersService — updateStatus ITEMIZED: pricing engine + admin override audit trail', () => {
+  const CLOTH_TYPE = {
+    _id: { toString: () => 'cloth-1' },
+    name: 'Shirt',
+    instantRate: 20,
+    scheduledRate: 15,
+    discountInstantRate: undefined,
+    discountScheduledRate: undefined,
+  };
+
+  function makeOrderDoc(overrides: Record<string, any> = {}) {
+    const doc: any = {
+      _id: 'order-1',
+      userId: 'user-1',
+      items: [{ serviceId: 'service-1', serviceName: 'Wash', quantity: 1, price: 100, category: 'instant' }],
+      status: 'PICKUP_ASSIGNED',
+      statusHistory: [],
+      deliveryType: DeliveryType.HOME_DELIVERY,
+      ...overrides,
+    };
+    doc.save = jest.fn().mockImplementation(async () => doc);
+    return doc;
+  }
+
+  async function buildService(opts: {
+    orderDoc: any;
+    pricing?: ReturnType<typeof mockPricingService>;
+    referralEnabled?: boolean;
+  }) {
+    const pricing = opts.pricing ?? mockPricingService();
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrdersService,
+        { provide: getModelToken(Order.name), useValue: { findById: jest.fn().mockResolvedValue(opts.orderDoc) } },
+        { provide: getModelToken(Cart.name), useValue: {} },
+        { provide: getModelToken(LaundryService.name), useValue: {} },
+        { provide: getModelToken(StandardTimeSlot.name), useValue: {} },
+        { provide: LocationsService, useValue: {} },
+        { provide: ServiceZonesService, useValue: {} },
+        {
+          provide: NotificationsService,
+          useValue: { notifyOrderStatus: jest.fn().mockResolvedValue(undefined), notifyAdmin: jest.fn().mockResolvedValue(undefined) },
+        },
+        { provide: SupportEventsService, useValue: { emitOrderUpdated: jest.fn() } },
+        { provide: UploadService, useValue: {} },
+        { provide: ClothTypesService, useValue: { findByIds: jest.fn().mockResolvedValue([CLOTH_TYPE]) } },
+        {
+          provide: ReferralService,
+          useValue: { getFirstOrderIncentiveConfig: jest.fn().mockResolvedValue({ enabled: opts.referralEnabled ?? false }) },
+        },
+        { provide: UsersService, useValue: { findNamesByIds: jest.fn().mockResolvedValue(new Map()) } },
+        { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: pricing },
+      ],
+    }).compile();
+
+    return { service: module.get<OrdersService>(OrdersService), pricing };
+  }
+
+  it('no override: billAmount equals the cloth-type calculated amount, no PriceAdjustmentLog written', async () => {
+    const orderDoc = makeOrderDoc();
+    const { service, pricing } = await buildService({ orderDoc });
+
+    const updated = await service.updateStatus(
+      'order-1',
+      { status: 'ITEMIZED' as any, clothTypeBreakdown: [{ clothTypeId: 'cloth-1', quantity: 2 } as any] },
+      { adminId: 'admin-1', ip: '1.2.3.4' },
+    );
+
+    expect(updated.billAmount).toBe(40); // 2 * instantRate(20)
+    expect(updated.isManuallyAdjusted).toBeFalsy();
+    expect(pricing.recordAdjustment).not.toHaveBeenCalled();
+  });
+
+  it('override without a reason is rejected before any pricing snapshot or audit log is written', async () => {
+    const orderDoc = makeOrderDoc();
+    const { service, pricing } = await buildService({ orderDoc });
+
+    await expect(
+      service.updateStatus(
+        'order-1',
+        { status: 'ITEMIZED' as any, clothTypeBreakdown: [{ clothTypeId: 'cloth-1', quantity: 2 } as any], billAmount: 999 },
+        { adminId: 'admin-1', ip: '1.2.3.4' },
+      ),
+    ).rejects.toThrow('A reason is required');
+
+    expect(pricing.recordSnapshot).not.toHaveBeenCalled();
+    expect(pricing.recordAdjustment).not.toHaveBeenCalled();
+  });
+
+  it('override with a reason succeeds, sets billAmount to the override, and records the audit trail with adminId/ip/diff', async () => {
+    const orderDoc = makeOrderDoc();
+    const { service, pricing } = await buildService({ orderDoc });
+
+    const updated = await service.updateStatus(
+      'order-1',
+      {
+        status: 'ITEMIZED' as any,
+        clothTypeBreakdown: [{ clothTypeId: 'cloth-1', quantity: 2 } as any],
+        billAmount: 100,
+        overrideReason: 'Extra stains, re-wash required',
+      },
+      { adminId: 'admin-1', ip: '1.2.3.4' },
+    );
+
+    expect(updated.billAmount).toBe(100); // calculatedAmount was 40
+    expect(updated.isManuallyAdjusted).toBe(true);
+    expect(pricing.recordAdjustment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderId: 'order-1',
+        previousAmount: 40,
+        newAmount: 100,
+        reason: 'Extra stains, re-wash required',
+        adminId: 'admin-1',
+        ipAddress: '1.2.3.4',
+      }),
+    );
+  });
+
+  it('an override beyond maxOverridePercent still succeeds but flags the order for manual review', async () => {
+    const orderDoc = makeOrderDoc();
+    const pricing = mockPricingService();
+    pricing.getConfig.mockResolvedValue({
+      taxRatePercent: 0,
+      deliveryFeeAmount: 0,
+      freeDeliveryThreshold: 249,
+      platformFeeAmount: 0,
+      convenienceFeeAmount: 0,
+      packagingFeeAmount: 0,
+      maxOverridePercent: 10, // tight threshold so a 150% jump trips it
+    });
+    const { service } = await buildService({ orderDoc, pricing });
+
+    const updated = await service.updateStatus(
+      'order-1',
+      {
+        status: 'ITEMIZED' as any,
+        clothTypeBreakdown: [{ clothTypeId: 'cloth-1', quantity: 2 } as any], // calculated = 40
+        billAmount: 100, // +150%
+        overrideReason: 'Manager-approved adjustment',
+      },
+      { adminId: 'admin-1', ip: '1.2.3.4' },
+    );
+
+    expect(updated.billAmount).toBe(100);
+    expect(updated.needsManualReview).toBe(true);
+    expect(updated.needsManualReviewReason).toMatch(/exceeds the 10% threshold/);
   });
 });

@@ -10,6 +10,8 @@ import {
 
   Min,
 
+  MaxLength,
+
   ValidateNested,
 
 } from 'class-validator';
@@ -105,6 +107,22 @@ export class UpdateOrderStatusDto {
   @Type(() => ClothTypeBreakdownDto)
 
   clothTypeBreakdown?: ClothTypeBreakdownDto[];
+
+
+
+  /**
+   * Reason for a manual admin price override — MANDATORY whenever billAmount
+   * is submitted and differs from the engine-calculated amount. Recorded in
+   * the PriceAdjustmentLog audit trail alongside the admin's id/ip/timestamp.
+   */
+
+  @IsOptional()
+
+  @IsString()
+
+  @MaxLength(500)
+
+  overrideReason?: string;
 
 
 
