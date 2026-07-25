@@ -4,12 +4,17 @@
  * caller (checkout, itemization, future recalculation jobs) must go through
  * this instead of computing pieces of the total inline.
  */
+import { PricingUnit } from './pricing-unit.enum';
 
 export interface PricingLineItem {
   label: string;
   amount: number;
   kind: 'auto' | 'manual';
   category?: string;
+  /** Set for per-service/per-cloth-type lines (category: 'service') — omitted for fee/tax/override/round-off lines. */
+  quantity?: number;
+  unit?: PricingUnit | string;
+  rate?: number;
 }
 
 export type DiscountSource = 'coupon' | 'first_order' | 'referral' | 'promotion' | 'loyalty';
@@ -27,11 +32,22 @@ export interface PricingConfigLike {
   platformFeeAmount: number;
   convenienceFeeAmount: number;
   packagingFeeAmount: number;
+  /** When true, rounds the pre-override total to the nearest rupee and records the diff as a "Round Off" line. Defaults to false — no charge changes unless an admin explicitly enables this. */
+  roundToNearestRupee?: boolean;
+}
+
+/** One selected service or cloth-type line — the itemized unit of the bill. */
+export interface PricingServiceLine {
+  label: string;
+  quantity: number;
+  unit: PricingUnit | string;
+  rate: number;
+  amount: number;
 }
 
 export interface ComputeBreakdownInput {
-  /** Sum of item price*quantity (checkout) or cloth-type breakdown amounts (itemization). */
-  itemsSubtotal: number;
+  /** One entry per selected service (checkout) or cloth type (itemization) — never a pre-summed total. */
+  serviceLines: PricingServiceLine[];
   /** Whether delivery-fee logic applies to this order at all (e.g. false for self-pickup/drop-at-shop). */
   applyDeliveryFee?: boolean;
   discounts?: PricingDiscount[];
@@ -43,6 +59,7 @@ export interface ComputeBreakdownInput {
 
 export interface PricingBreakdown {
   lineItems: PricingLineItem[];
+  itemsSubtotal: number;
   taxableSubtotal: number;
   taxRatePercent: number;
   taxAmount: number;
@@ -52,6 +69,7 @@ export interface PricingBreakdown {
   packagingFee: number;
   discounts: PricingDiscount[];
   walletDeductionAmount: number;
+  roundingAdjustment: number;
   payableTotal: number;
   isManualOverride: boolean;
   overrideReason?: string;
@@ -63,7 +81,7 @@ function round2(n: number): number {
 
 export function computeBreakdown(input: ComputeBreakdownInput): PricingBreakdown {
   const {
-    itemsSubtotal,
+    serviceLines,
     applyDeliveryFee = true,
     discounts = [],
     walletDeductionAmount = 0,
@@ -71,9 +89,20 @@ export function computeBreakdown(input: ComputeBreakdownInput): PricingBreakdown
     config,
   } = input;
 
-  const lineItems: PricingLineItem[] = [
-    { label: 'Items Subtotal', amount: round2(itemsSubtotal), kind: 'auto', category: 'items' },
-  ];
+  const itemsSubtotal = round2(serviceLines.reduce((sum, l) => sum + l.amount, 0));
+
+  // One line item per selected service/cloth-type — never collapsed into a
+  // single "Items Subtotal" figure, so the customer sees exactly what they
+  // were charged for each item.
+  const lineItems: PricingLineItem[] = serviceLines.map((line) => ({
+    label: line.label,
+    amount: round2(line.amount),
+    kind: 'auto',
+    category: 'service',
+    quantity: line.quantity,
+    unit: line.unit,
+    rate: line.rate,
+  }));
 
   const deliveryFee = applyDeliveryFee
     ? itemsSubtotal >= config.freeDeliveryThreshold
@@ -114,7 +143,21 @@ export function computeBreakdown(input: ComputeBreakdownInput): PricingBreakdown
   const discountsTotal = round2(discounts.reduce((sum, d) => sum + d.amount, 0));
   const walletDeduction = round2(Math.max(0, walletDeductionAmount));
 
-  const autoTotal = Math.max(0, round2(taxableSubtotal + taxAmount - discountsTotal - walletDeduction));
+  let autoTotal = Math.max(0, round2(taxableSubtotal + taxAmount - discountsTotal - walletDeduction));
+
+  // Round Off — inactive by default (config.roundToNearestRupee undefined/false).
+  // When enabled, rounds the pre-override total to the nearest rupee and
+  // records the diff as its own line so the customer sees exactly what was
+  // adjusted and why, rather than a total that doesn't add up.
+  let roundingAdjustment = 0;
+  if (config.roundToNearestRupee) {
+    const rounded = Math.round(autoTotal);
+    roundingAdjustment = round2(rounded - autoTotal);
+    if (roundingAdjustment !== 0) {
+      lineItems.push({ label: 'Round Off', amount: roundingAdjustment, kind: 'auto', category: 'rounding' });
+    }
+    autoTotal = rounded;
+  }
 
   if (manualOverride) {
     const payableTotal = round2(Math.max(0, manualOverride.amount));
@@ -127,6 +170,7 @@ export function computeBreakdown(input: ComputeBreakdownInput): PricingBreakdown
     });
     return {
       lineItems,
+      itemsSubtotal,
       taxableSubtotal,
       taxRatePercent,
       taxAmount,
@@ -136,6 +180,7 @@ export function computeBreakdown(input: ComputeBreakdownInput): PricingBreakdown
       packagingFee,
       discounts,
       walletDeductionAmount: walletDeduction,
+      roundingAdjustment,
       payableTotal,
       isManualOverride: true,
       overrideReason: manualOverride.reason,
@@ -144,6 +189,7 @@ export function computeBreakdown(input: ComputeBreakdownInput): PricingBreakdown
 
   return {
     lineItems,
+    itemsSubtotal,
     taxableSubtotal,
     taxRatePercent,
     taxAmount,
@@ -153,6 +199,7 @@ export function computeBreakdown(input: ComputeBreakdownInput): PricingBreakdown
     packagingFee,
     discounts,
     walletDeductionAmount: walletDeduction,
+    roundingAdjustment,
     payableTotal: autoTotal,
     isManualOverride: false,
   };

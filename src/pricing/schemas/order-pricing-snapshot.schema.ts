@@ -22,6 +22,16 @@ export class PricingLineItem {
 
   @Prop({ required: false })
   category?: string;
+
+  /** Set for per-service/per-cloth-type lines (category: 'service'). */
+  @Prop({ required: false })
+  quantity?: number;
+
+  @Prop({ required: false })
+  unit?: string;
+
+  @Prop({ required: false })
+  rate?: number;
 }
 
 export class PricingDiscountItem {
@@ -50,8 +60,14 @@ export class OrderPricingSnapshot {
   @Prop({ required: true, enum: PricingSnapshotReason })
   reason: PricingSnapshotReason;
 
-  @Prop({ type: [{ label: String, amount: Number, kind: String, category: String }], default: [] })
+  @Prop({
+    type: [{ label: String, amount: Number, kind: String, category: String, quantity: Number, unit: String, rate: Number }],
+    default: [],
+  })
   lineItems: PricingLineItem[];
+
+  @Prop({ required: true, default: 0 })
+  itemsSubtotal: number;
 
   @Prop({ required: true, default: 0 })
   taxableSubtotal: number;
@@ -79,6 +95,9 @@ export class OrderPricingSnapshot {
 
   @Prop({ required: true, default: 0 })
   walletDeductionAmount: number;
+
+  @Prop({ required: true, default: 0 })
+  roundingAdjustment: number;
 
   @Prop({ required: true })
   payableTotal: number;

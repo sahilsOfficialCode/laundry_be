@@ -50,6 +50,14 @@ export class PricingConfig {
   packagingFeeAmount: number;
 
   /**
+   * When true, rounds each order's pre-override total to the nearest rupee
+   * and shows the diff as a "Round Off" line. Defaults to false — ready to
+   * enable, not enabled yet, so no customer's charge changes on rollout.
+   */
+  @Prop({ default: false })
+  roundToNearestRupee: boolean;
+
+  /**
    * Soft guard only: an admin override beyond this percentage difference from
    * the calculated amount doesn't get blocked, but flags the order for
    * manual review (needsManualReview) so it doesn't ship unnoticed.

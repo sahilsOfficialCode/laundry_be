@@ -50,6 +50,8 @@ import { PricingModule } from './pricing/pricing.module';
 
 import { InvoicesModule } from './invoices/invoices.module';
 
+import { ServiceAvailabilityModule } from './service-availability/service-availability.module';
+
 import { AppController } from './app.controller';
 
 
@@ -113,6 +115,8 @@ import { AppController } from './app.controller';
     PricingModule,
 
     InvoicesModule,
+
+    ServiceAvailabilityModule,
 
   ],
 

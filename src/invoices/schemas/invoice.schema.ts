@@ -26,8 +26,19 @@ export class InvoiceItemSnapshot {
   @Prop({ required: true })
   name: string;
 
+  /** Service name (e.g. "Wash & Fold", "Dry Cleaning") — copied from the order at invoice generation time, never re-fetched from ClothType. */
+  @Prop({ required: false })
+  serviceName?: string;
+
+  /** Processing type this line was billed under — 'instant' | 'scheduled'. */
+  @Prop({ required: false })
+  serviceType?: string;
+
   @Prop({ required: true })
   quantity: number;
+
+  @Prop({ required: false })
+  unit?: string;
 
   @Prop({ required: true })
   rate: number;
@@ -62,7 +73,10 @@ export class Invoice {
   @Prop({ required: false })
   billingAddressSnapshot?: string;
 
-  @Prop({ type: [{ name: String, quantity: Number, rate: Number, amount: Number }], default: [] })
+  @Prop({
+    type: [{ name: String, serviceName: String, serviceType: String, quantity: Number, unit: String, rate: Number, amount: Number }],
+    default: [],
+  })
   itemsSnapshot: InvoiceItemSnapshot[];
 
   @Prop({ type: [{ label: String, amount: Number, kind: String }], default: [] })
@@ -91,6 +105,9 @@ export class Invoice {
 
   @Prop({ required: true, default: 0 })
   walletDeductionAmount: number;
+
+  @Prop({ required: true, default: 0 })
+  roundingAdjustment: number;
 
   @Prop({ required: true })
   payableTotal: number;

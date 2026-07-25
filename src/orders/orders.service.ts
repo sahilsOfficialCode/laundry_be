@@ -38,8 +38,10 @@ import { CheckoutContextDto } from './dto/checkout-context.dto';
 
 import {
   INSTANT_ORDER_UNAVAILABLE_MESSAGE,
-  isInstantAvailable,
+  SCHEDULED_ORDER_UNAVAILABLE_MESSAGE,
 } from '../common/instant-availability';
+
+import { ServiceAvailabilityService } from '../service-availability/service-availability.service';
 
 import { isDropAtShopDirectSelectionEnabled } from '../common/feature-flags';
 
@@ -66,6 +68,8 @@ import { UsersService } from '../users/users.service';
 import { CouponsService } from '../coupons/services/coupons.service';
 
 import { PricingService, PricingSnapshotReason } from '../pricing/pricing.service';
+
+import { PricingUnit } from '../pricing/pricing-unit.enum';
 
 
 
@@ -128,6 +132,8 @@ export class OrdersService {
     private readonly couponsService: CouponsService,
 
     private readonly pricingService: PricingService,
+
+    private readonly serviceAvailabilityService: ServiceAvailabilityService,
 
   ) {}
 
@@ -442,6 +448,8 @@ export class OrdersService {
 
           category: (item as any).category ?? 'instant',
 
+          unit: service.unit ?? PricingUnit.KG,
+
           turnaroundHours: service.turnaroundHours ?? 24,
 
           instantTurnaroundMinutes: service.instantTurnaroundMinutes ?? 90,
@@ -490,15 +498,23 @@ export class OrdersService {
 
 
 
-    // Instant orders stop being accepted after today's cutoff (see
-    // INSTANT_ORDER_CUTOFF_TIME / isInstantAvailable). Checked against the
-    // cart item category rather than checkoutContext.pickupSlot so this
-    // covers every serviceType (Drop at Shop included) — a stale/fallback
-    // slot label can't bypass it the way a slot-only check could.
-    if (orderItems.some((i) => i.category === 'instant') && !isInstantAvailable()) {
-
+    // Instant/Scheduled service can each be disabled or windowed by admin
+    // (ServiceAvailabilityService). Checked against the cart item category
+    // rather than checkoutContext.pickupSlot so this covers every
+    // serviceType (Drop at Shop included) — a stale/fallback slot label
+    // can't bypass it the way a slot-only check could.
+    if (
+      orderItems.some((i) => i.category === 'instant') &&
+      !(await this.serviceAvailabilityService.isInstantAvailable())
+    ) {
       throw new BadRequestException(INSTANT_ORDER_UNAVAILABLE_MESSAGE);
+    }
 
+    if (
+      orderItems.some((i) => i.category === 'scheduled') &&
+      !(await this.serviceAvailabilityService.isScheduledAvailable())
+    ) {
+      throw new BadRequestException(SCHEDULED_ORDER_UNAVAILABLE_MESSAGE);
     }
 
 
@@ -534,7 +550,13 @@ export class OrdersService {
     const pricingConfig = await this.pricingService.getConfig();
     const checkoutDeliveryType = checkoutContext.deliveryType ?? DeliveryType.HOME_DELIVERY;
     const pricingBreakdown = this.pricingService.compute({
-      itemsSubtotal: cartTotalAmount,
+      serviceLines: orderItems.map((item) => ({
+        label: item.serviceName,
+        quantity: item.quantity,
+        unit: item.unit,
+        rate: item.price,
+        amount: item.price * item.quantity,
+      })),
       applyDeliveryFee: checkoutDeliveryType === DeliveryType.HOME_DELIVERY,
       discounts: couponPreview
         ? [{ label: `Coupon (${couponPreview.couponCode})`, amount: couponPreview.discountAmount, source: 'coupon' }]
@@ -687,6 +709,7 @@ export class OrdersService {
       platformFee: pricingBreakdown.platformFee,
       convenienceFee: pricingBreakdown.convenienceFee,
       packagingFee: pricingBreakdown.packagingFee,
+      roundingAdjustment: pricingBreakdown.roundingAdjustment,
 
     });
 
@@ -935,11 +958,79 @@ export class OrdersService {
 
 
 
-  /** Attaches customerName/customerPhone (looked up from Users) to order docs for admin display/printing. */
+  /** Minutes-remaining threshold below which an active SLA counts as "Due Soon" rather than "On Time". Env-configurable, defaults to 30. */
+  private slaDueSoonThresholdMs(): number {
+    const minutes = Number(process.env.SLA_DUE_SOON_THRESHOLD_MINUTES);
+    return (Number.isFinite(minutes) && minutes > 0 ? minutes : 30) * 60_000;
+  }
+
+  /**
+   * SLA milestone/deadline/status for the admin countdown UI. Reuses the
+   * PICKUP-phase deadline already resolved by the caller (the same value
+   * that gates cancellation eligibility) and the order's own `deliveryDate`
+   * (already computed once at checkout as the committed instant-completion
+   * / scheduled-delivery deadline) — no new stored field, no duplicate
+   * calculation. Never trusts anything client-supplied.
+   */
+  private computeSlaStatus(order: OrderDocument, pickupDeadline: Date | null, now: Date) {
+    if (order.status === OrderStatus.COMPLETED || order.status === OrderStatus.CANCELLED) {
+      return { slaMilestone: null, slaDeadline: null, slaStatus: null };
+    }
+
+    const isInstant = (order.items ?? []).some((i: any) => i.category === 'instant');
+    let milestone: 'PICKUP' | 'DELIVERY' | 'COMPLETION';
+    let deadline: Date | null;
+
+    if (isInstant) {
+      milestone = 'COMPLETION';
+      deadline = order.deliveryDate ?? null;
+    } else if (order.status === OrderStatus.ORDER_PLACED) {
+      milestone = 'PICKUP';
+      deadline = pickupDeadline;
+    } else {
+      milestone = 'DELIVERY';
+      deadline = order.deliveryDate ?? null;
+    }
+
+    if (!deadline) return { slaMilestone: milestone, slaDeadline: null, slaStatus: null };
+
+    const msRemaining = deadline.getTime() - now.getTime();
+    const slaStatus =
+      msRemaining < 0 ? 'OVERDUE' : msRemaining <= this.slaDueSoonThresholdMs() ? 'DUE_SOON' : 'ON_TIME';
+
+    return { slaMilestone: milestone, slaDeadline: deadline, slaStatus };
+  }
+
+  /**
+   * Attaches customerName/customerPhone (looked up from Users), canAdminCancel
+   * (whether this order is an expired-Pending order eligible for admin
+   * cancellation), and SLA milestone/deadline/status (for the countdown UI)
+   * to order docs for admin display/printing.
+   */
 
   private async attachCustomerInfo(orders: OrderDocument[]) {
 
     const userMap = await this.usersService.findNamesByIds(orders.map((o) => o.userId));
+
+    // Batch-resolve pickup-slot end times only for orders that could
+    // actually be cancellation-eligible — avoids a query when none exist,
+    // and avoids one query per order (N+1) when several do.
+    const pendingLabels = [...new Set(
+      orders
+        .filter((o) => o.status === OrderStatus.ORDER_PLACED && o.pickupSlot)
+        .map((o) => o.pickupSlot!.trim())
+        .filter((label) => label.toLowerCase() !== 'instant'),
+    )];
+    let slotEndTimeByLabel = new Map<string, string>();
+    if (pendingLabels.length > 0) {
+      const slots = await this.standardSlotModel
+        .find({ label: { $in: pendingLabels.map((l) => new RegExp(`^${this.escapeRegex(l)}$`, 'i')) } })
+        .select('label endTime')
+        .lean()
+        .exec();
+      slotEndTimeByLabel = new Map(slots.map((s) => [s.label.toLowerCase(), s.endTime]));
+    }
+    const now = new Date();
 
     return orders.map((o) => {
 
@@ -950,6 +1041,21 @@ export class OrdersService {
       plain.customerName = info?.name;
 
       plain.customerPhone = info?.mobileNumber;
+
+      let pickupDeadline: Date | null = null;
+      if (o.status === OrderStatus.ORDER_PLACED && o.pickupDate) {
+        const label = o.pickupSlot?.trim();
+        const endTime =
+          label && label.toLowerCase() !== 'instant'
+            ? slotEndTimeByLabel.get(label.toLowerCase()) ?? '23:59'
+            : '23:59';
+        pickupDeadline = this.buildDeadlineDate(o.pickupDate.toISOString().slice(0, 10), endTime);
+        plain.canAdminCancel = pickupDeadline <= now;
+      } else {
+        plain.canAdminCancel = false;
+      }
+
+      Object.assign(plain, this.computeSlaStatus(o, pickupDeadline, now));
 
       return plain;
 
@@ -1037,6 +1143,34 @@ export class OrdersService {
     return Math.round(discount * 100) / 100;
   }
 
+  /** Builds a deadline Date from a calendar date + HH:MM, interpreted in IST. */
+  private buildDeadlineDate(dateISO: string, endTimeHHMM: string): Date {
+    return new Date(`${dateISO}T${endTimeHHMM}:00.000+05:30`);
+  }
+
+  /**
+   * Deadline after which a still-Pending (ORDER_PLACED) order becomes
+   * eligible for admin cancellation — the end of its scheduled pickup
+   * window. Falls back to end-of-day on pickupDate when no matching slot
+   * can be resolved (Instant orders, or a stale/unknown slot label).
+   */
+  private async resolvePickupDeadline(order: OrderDocument): Promise<Date | null> {
+    if (!order.pickupDate) return null;
+    const dateISO = order.pickupDate.toISOString().slice(0, 10);
+    const label = order.pickupSlot?.trim();
+
+    if (label && label.toLowerCase() !== 'instant') {
+      const slot = await this.standardSlotModel
+        .findOne({ label: { $regex: `^${this.escapeRegex(label)}$`, $options: 'i' } })
+        .select('endTime')
+        .lean()
+        .exec();
+      if (slot?.endTime) return this.buildDeadlineDate(dateISO, slot.endTime);
+    }
+
+    return this.buildDeadlineDate(dateISO, '23:59');
+  }
+
   // Get single order (owner only)
 
   async findById(orderId: string, userId: string) {
@@ -1093,6 +1227,26 @@ export class OrdersService {
 
 
 
+    // CANCELLED (from ORDER_PLACED / "Pending") is only allowed once the
+    // scheduled pickup window has passed — cancelling an already-assigned
+    // order (PICKUP_ASSIGNED → CANCELLED) is a separate, pre-existing admin
+    // action and is not deadline-gated.
+    if (dto.status === OrderStatus.CANCELLED && order.status === OrderStatus.ORDER_PLACED) {
+      const deadline = await this.resolvePickupDeadline(order);
+      if (!deadline || deadline > new Date()) {
+        throw new BadRequestException(
+          'This order cannot be cancelled yet — the scheduled pickup window has not passed.',
+        );
+      }
+    }
+
+
+
+    // Captured before mutation — used as the atomic guard below so two
+    // concurrent cancel requests (or a cancel racing another concurrent
+    // status update) can't both silently apply.
+    const previousStatus = order.status;
+
     order.status = dto.status;
 
 
@@ -1106,6 +1260,16 @@ export class OrdersService {
       { status: dto.status, timestamp: new Date() },
 
     ];
+
+
+
+    // Admin-initiated cancellation audit trail — recorded regardless of
+    // which prior status allowed it.
+    if (dto.status === OrderStatus.CANCELLED) {
+      order.cancelledBy = actor?.adminId;
+      order.cancelledAt = new Date();
+      if (dto.cancellationReason?.trim()) order.cancellationReason = dto.cancellationReason.trim();
+    }
 
 
 
@@ -1159,6 +1323,11 @@ export class OrdersService {
             rate,
             amount,
             serviceType,
+            // Snapshotted once, here, at itemization time — never re-fetched
+            // from ClothType afterward, so a later rename of the catalog
+            // category can't silently rewrite historical orders/invoices.
+            serviceName: clothType.category ?? '-',
+            unit: clothType.unit ?? PricingUnit.PIECE,
           };
         });
 
@@ -1179,7 +1348,13 @@ export class OrdersService {
 
         const pricingConfig = await this.pricingService.getConfig();
         const breakdown = this.pricingService.compute({
-          itemsSubtotal: calculatedAmount,
+          serviceLines: clothBreakdownWithCalc.map((c) => ({
+            label: c.clothTypeName,
+            quantity: c.quantity,
+            unit: c.unit,
+            rate: c.rate,
+            amount: c.amount,
+          })),
           applyDeliveryFee: false,
           config: pricingConfig,
           manualOverride: isOverride
@@ -1193,6 +1368,7 @@ export class OrdersService {
         order.platformFee = breakdown.platformFee;
         order.convenienceFee = breakdown.convenienceFee;
         order.packagingFee = breakdown.packagingFee;
+        order.roundingAdjustment = breakdown.roundingAdjustment;
 
         const snapshot = await this.pricingService.recordSnapshot(
           orderId,
@@ -1237,7 +1413,12 @@ export class OrdersService {
         }
         const pricingConfig = await this.pricingService.getConfig();
         const breakdown = this.pricingService.compute({
-          itemsSubtotal: dto.billAmount,
+          // No real per-item breakdown exists in this legacy path — the
+          // whole bill is a single line so the itemized-breakdown UI still
+          // has something concrete to render instead of nothing.
+          serviceLines: [
+            { label: 'Bill Amount', quantity: 1, unit: PricingUnit.ORDER, rate: dto.billAmount, amount: dto.billAmount },
+          ],
           applyDeliveryFee: false,
           config: pricingConfig,
         });
@@ -1247,6 +1428,7 @@ export class OrdersService {
         order.platformFee = breakdown.platformFee;
         order.convenienceFee = breakdown.convenienceFee;
         order.packagingFee = breakdown.packagingFee;
+        order.roundingAdjustment = breakdown.roundingAdjustment;
 
         const snapshot = await this.pricingService.recordSnapshot(
           orderId,
@@ -1326,7 +1508,35 @@ export class OrdersService {
 
 
 
-    const updatedOrder = await order.save();
+    // CANCELLED uses an atomic conditional write, guarded on the status we
+    // originally read, instead of the plain save() every other transition
+    // uses — closes the TOCTOU window where two concurrent cancel requests
+    // (or a cancel racing another concurrent status update) could otherwise
+    // both read the same pre-cancel state and both "succeed".
+    let updatedOrder: OrderDocument;
+    if (dto.status === OrderStatus.CANCELLED) {
+      const result = await this.orderModel.findOneAndUpdate(
+        { _id: orderId, status: previousStatus },
+        {
+          $set: {
+            status: OrderStatus.CANCELLED,
+            cancelledBy: order.cancelledBy,
+            cancelledAt: order.cancelledAt,
+            ...(order.cancellationReason ? { cancellationReason: order.cancellationReason } : {}),
+          },
+          $push: { statusHistory: { status: OrderStatus.CANCELLED, timestamp: new Date() } },
+        },
+        { new: true },
+      );
+      if (!result) {
+        throw new BadRequestException(
+          'This order was already updated by another request — please refresh and try again.',
+        );
+      }
+      updatedOrder = result;
+    } else {
+      updatedOrder = await order.save();
+    }
 
 
 

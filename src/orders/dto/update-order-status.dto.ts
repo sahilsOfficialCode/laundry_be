@@ -200,5 +200,17 @@ export class UpdateOrderStatusDto {
 
   otp?: string;
 
+
+
+  /** Optional reason recorded when an admin cancels an order — status = CANCELLED. */
+
+  @IsOptional()
+
+  @IsString()
+
+  @MaxLength(500)
+
+  cancellationReason?: string;
+
 }
 

@@ -7,12 +7,21 @@ export interface InvoicePdfInput {
   generatedAt: Date;
   customerSnapshot?: { name?: string; phone?: string; email?: string };
   billingAddressSnapshot?: string;
-  itemsSnapshot: { name: string; quantity: number; rate: number; amount: number }[];
+  itemsSnapshot: {
+    name: string;
+    serviceName?: string;
+    serviceType?: string;
+    quantity: number;
+    unit?: string;
+    rate: number;
+    amount: number;
+  }[];
   lineItems: { label: string; amount: number; kind: 'auto' | 'manual' }[];
   taxRatePercent: number;
   taxAmount: number;
   discounts: { label: string; amount: number }[];
   walletDeductionAmount: number;
+  roundingAdjustment: number;
   payableTotal: number;
   paymentMethod?: string;
   razorpayPaymentId?: string;
@@ -23,6 +32,12 @@ const COMPANY_TAGLINE = 'Laundry & Dry Cleaning Services';
 
 function formatRupees(n: number): string {
   return `Rs. ${n.toFixed(2)}`;
+}
+
+function formatProcessingType(serviceType?: string): string {
+  if (serviceType === 'instant') return 'Instant';
+  if (serviceType === 'scheduled') return 'Scheduled';
+  return serviceType || '-';
 }
 
 /** Pure — builds a PDF buffer from an already-fetched invoice; no DB/network access. */
@@ -55,23 +70,33 @@ export function buildInvoicePdf(invoice: InvoicePdfInput): Promise<Buffer> {
     doc.moveDown(1);
 
     // ── Items table ──────────────────────────────────────────────────────────
+    // Columns: # | Service | Item | Processing | Qty | Rate | Amount — service
+    // name and processing type come from the immutable snapshot copied at
+    // itemization/invoice-generation time, never re-fetched from the catalog.
     doc.fontSize(10).text('Items', { underline: true });
     doc.moveDown(0.3);
-    const colX = { name: 50, qty: 300, rate: 360, amount: 450 };
+    const colX = { idx: 50, service: 72, item: 172, processing: 272, qty: 335, rate: 385, amount: 445 };
     doc.fontSize(9).fillColor('#666');
-    doc.text('Description', colX.name, doc.y, { continued: false });
+    doc.text('#', colX.idx, doc.y, { continued: false });
+    doc.text('Service', colX.service, doc.y - 12, { width: 95 });
+    doc.text('Item', colX.item, doc.y - 12, { width: 95 });
+    doc.text('Processing', colX.processing, doc.y - 12, { width: 58 });
     doc.text('Qty', colX.qty, doc.y - 12);
     doc.text('Rate', colX.rate, doc.y - 12);
     doc.text('Amount', colX.amount, doc.y - 12);
     doc.moveDown(0.3);
     doc.fillColor('#000');
-    for (const item of invoice.itemsSnapshot) {
+    invoice.itemsSnapshot.forEach((item, idx) => {
       const y = doc.y;
-      doc.text(item.name, colX.name, y, { width: 240 });
-      doc.text(String(item.quantity), colX.qty, y);
+      const qtyLabel = item.unit ? `${item.quantity} ${item.unit}` : String(item.quantity);
+      doc.text(String(idx + 1), colX.idx, y);
+      doc.text(item.serviceName || '-', colX.service, y, { width: 95 });
+      doc.text(item.name, colX.item, y, { width: 95 });
+      doc.text(formatProcessingType(item.serviceType), colX.processing, y, { width: 58 });
+      doc.text(qtyLabel, colX.qty, y);
       doc.text(formatRupees(item.rate), colX.rate, y);
       doc.text(formatRupees(item.amount), colX.amount, y);
-    }
+    });
     doc.moveDown(1);
 
     // ── Pricing breakdown ────────────────────────────────────────────────────

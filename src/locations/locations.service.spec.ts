@@ -7,15 +7,18 @@ import { LocationClosure } from './schemas/location-closure.schema';
 import { LocationAuditLog } from './schemas/location-audit-log.schema';
 import { Order } from '../orders/schemas/order.schema';
 import { StandardTimeSlot } from '../standard-time-slots/schemas/standard-time-slot.schema';
-import { isInstantAvailable } from '../common/instant-availability';
+import { ServiceAvailabilityService } from '../service-availability/service-availability.service';
 
-jest.mock('../common/instant-availability', () => ({
-  isInstantAvailable: jest.fn(),
-  INSTANT_ORDER_UNAVAILABLE_MESSAGE: 'Instant not available',
-}));
+function mockServiceAvailability(overrides: { instant?: boolean; scheduled?: boolean } = {}) {
+  return {
+    isInstantAvailable: jest.fn().mockResolvedValue(overrides.instant ?? true),
+    isScheduledAvailable: jest.fn().mockResolvedValue(overrides.scheduled ?? true),
+  };
+}
 
 describe('LocationsService — Instant checkout validation', () => {
   let service: LocationsService;
+  let serviceAvailability: ReturnType<typeof mockServiceAvailability>;
 
   const candidateLocation = {
     _id: 'location-1',
@@ -39,6 +42,8 @@ describe('LocationsService — Instant checkout validation', () => {
   };
 
   beforeEach(async () => {
+    serviceAvailability = mockServiceAvailability();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         LocationsService,
@@ -65,15 +70,15 @@ describe('LocationsService — Instant checkout validation', () => {
           useValue: { countDocuments: jest.fn().mockResolvedValue(0) },
         },
         { provide: getModelToken(StandardTimeSlot.name), useValue: {} },
+        { provide: ServiceAvailabilityService, useValue: serviceAvailability },
       ],
     }).compile();
 
     service = module.get<LocationsService>(LocationsService);
-    jest.clearAllMocks();
   });
 
   it('Instant checkout succeeds before cutoff', async () => {
-    (isInstantAvailable as jest.Mock).mockReturnValue(true);
+    serviceAvailability.isInstantAvailable.mockResolvedValue(true);
 
     const location = await service.validateBookingEligibility(bookingPayload as any);
 
@@ -81,7 +86,7 @@ describe('LocationsService — Instant checkout validation', () => {
   });
 
   it('Instant checkout is rejected after cutoff', async () => {
-    (isInstantAvailable as jest.Mock).mockReturnValue(false);
+    serviceAvailability.isInstantAvailable.mockResolvedValue(false);
 
     await expect(
       service.validateBookingEligibility(bookingPayload as any),
@@ -92,7 +97,7 @@ describe('LocationsService — Instant checkout validation', () => {
   });
 
   it('does not affect non-Instant (scheduled) bookings', async () => {
-    (isInstantAvailable as jest.Mock).mockReturnValue(false);
+    serviceAvailability.isInstantAvailable.mockResolvedValue(false);
 
     const location = await service.validateBookingEligibility({
       ...bookingPayload,
@@ -145,11 +150,11 @@ describe('LocationsService — validateSelectedLocation (DIRECT_SELECTION mode)'
         { provide: getModelToken(LocationAuditLog.name), useValue: {} },
         { provide: getModelToken(Order.name), useValue: orderModel },
         { provide: getModelToken(StandardTimeSlot.name), useValue: {} },
+        { provide: ServiceAvailabilityService, useValue: mockServiceAvailability() },
       ],
     }).compile();
 
     service = module.get<LocationsService>(LocationsService);
-    (isInstantAvailable as jest.Mock).mockReturnValue(true);
   });
 
   function mockFoundLocation(location: any) {

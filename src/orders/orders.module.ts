@@ -26,6 +26,7 @@ import { ReferralModule } from '../referrals/referral.module';
 import { UsersModule } from '../users/users.module';
 import { CouponsModule } from '../coupons/coupons.module';
 import { PricingModule } from '../pricing/pricing.module';
+import { ServiceAvailabilityModule } from '../service-availability/service-availability.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { PricingModule } from '../pricing/pricing.module';
     UsersModule,
     CouponsModule,
     PricingModule,
+    ServiceAvailabilityModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService],

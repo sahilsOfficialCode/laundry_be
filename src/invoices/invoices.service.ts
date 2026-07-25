@@ -5,6 +5,7 @@ import { Invoice, InvoiceDocument } from './schemas/invoice.schema';
 import { InvoiceCounter, InvoiceCounterDocument } from './schemas/invoice-counter.schema';
 import { Order, OrderDocument } from '../orders/schemas/order.schema';
 import { PricingService } from '../pricing/pricing.service';
+import { PricingUnit } from '../pricing/pricing-unit.enum';
 import { UsersService } from '../users/users.service';
 import { buildInvoicePdf, InvoicePdfInput } from './pdf/invoice-pdf.builder';
 
@@ -55,17 +56,27 @@ export class InvoicesService {
     const snapshot = await this.pricingService.getLatestSnapshot(orderId);
     const user = await this.usersService.findById(String(order.userId));
 
+    // Copied once, here, from the order — never re-fetched from ClothType/
+    // Service afterward, so a later catalog rename can't alter an already-
+    // generated invoice. Orders itemized before this field existed simply
+    // have no serviceName/serviceType to copy — '-' fallback, not an error.
     const itemsSnapshot =
       order.clothTypeBreakdown && order.clothTypeBreakdown.length > 0
         ? order.clothTypeBreakdown.map((c) => ({
             name: c.clothTypeName,
+            serviceName: c.serviceName ?? '-',
+            serviceType: c.serviceType ?? '-',
             quantity: c.quantity,
+            unit: c.unit ?? PricingUnit.PIECE,
             rate: c.rate,
             amount: c.amount,
           }))
         : (order.items || []).map((i) => ({
             name: i.serviceName,
+            serviceName: i.serviceName ?? '-',
+            serviceType: i.category ?? '-',
             quantity: i.quantity,
+            unit: i.unit ?? PricingUnit.KG,
             rate: i.price,
             amount: i.price * i.quantity,
           }));
@@ -81,9 +92,15 @@ export class InvoicesService {
       discounts.push({ label: 'First Order Discount Applied', amount: order.firstOrderDiscountAmount });
     }
 
+    // Per-service/cloth-type lines are already fully represented in
+    // itemsSnapshot above (with quantity/unit/rate) — exclude them here so
+    // the PDF's billing summary doesn't repeat every item a second time,
+    // only the fees/tax/discounts/rounding/override lines that sit on top.
     const lineItems =
       snapshot?.lineItems && snapshot.lineItems.length > 0
-        ? snapshot.lineItems.map((l) => ({ label: l.label, amount: l.amount, kind: l.kind }))
+        ? snapshot.lineItems
+            .filter((l) => l.category !== 'service')
+            .map((l) => ({ label: l.label, amount: l.amount, kind: l.kind }))
         : [
             {
               label: 'Items Subtotal',
@@ -111,6 +128,7 @@ export class InvoicesService {
       packagingFee: order.packagingFee ?? 0,
       discounts,
       walletDeductionAmount: order.walletDeductionAmount ?? 0,
+      roundingAdjustment: order.roundingAdjustment ?? 0,
       payableTotal: order.billAmount ?? order.totalAmount,
       paymentMethod: 'Razorpay',
       razorpayPaymentId: order.razorpayPaymentId,
@@ -138,6 +156,7 @@ export class InvoicesService {
       taxAmount: invoice.taxAmount,
       discounts: invoice.discounts,
       walletDeductionAmount: invoice.walletDeductionAmount,
+      roundingAdjustment: invoice.roundingAdjustment,
       payableTotal: invoice.payableTotal,
       paymentMethod: invoice.paymentMethod,
       razorpayPaymentId: invoice.razorpayPaymentId,

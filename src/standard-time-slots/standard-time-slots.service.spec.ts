@@ -3,14 +3,11 @@ import { getModelToken } from '@nestjs/mongoose';
 import { StandardTimeSlotsService } from './standard-time-slots.service';
 import { StandardTimeSlot } from './schemas/standard-time-slot.schema';
 import { Order } from '../orders/schemas/order.schema';
-import { isInstantAvailable } from '../common/instant-availability';
-
-jest.mock('../common/instant-availability', () => ({
-  isInstantAvailable: jest.fn(),
-}));
+import { ServiceAvailabilityService } from '../service-availability/service-availability.service';
 
 describe('StandardTimeSlotsService — Instant availability', () => {
   let service: StandardTimeSlotsService;
+  let serviceAvailability: { isInstantAvailable: jest.Mock; isScheduledAvailable: jest.Mock };
 
   beforeEach(async () => {
     // No admin-created slots for these tests: getAvailable() falls back to
@@ -22,6 +19,11 @@ describe('StandardTimeSlotsService — Instant availability', () => {
       exec: jest.fn().mockResolvedValue([]),
     };
 
+    serviceAvailability = {
+      isInstantAvailable: jest.fn().mockResolvedValue(true),
+      isScheduledAvailable: jest.fn().mockResolvedValue(true),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         StandardTimeSlotsService,
@@ -30,15 +32,15 @@ describe('StandardTimeSlotsService — Instant availability', () => {
           provide: getModelToken(Order.name),
           useValue: { aggregate: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue([]) }) },
         },
+        { provide: ServiceAvailabilityService, useValue: serviceAvailability },
       ],
     }).compile();
 
     service = module.get<StandardTimeSlotsService>(StandardTimeSlotsService);
-    jest.clearAllMocks();
   });
 
   it('includes the Instant slot before cutoff', async () => {
-    (isInstantAvailable as jest.Mock).mockReturnValue(true);
+    serviceAvailability.isInstantAvailable.mockResolvedValue(true);
 
     const result = await service.getAvailable('2026-07-12');
 
@@ -47,7 +49,7 @@ describe('StandardTimeSlotsService — Instant availability', () => {
   });
 
   it('omits the Instant slot after cutoff', async () => {
-    (isInstantAvailable as jest.Mock).mockReturnValue(false);
+    serviceAvailability.isInstantAvailable.mockResolvedValue(false);
 
     const result = await service.getAvailable('2026-07-12');
 
@@ -55,5 +57,16 @@ describe('StandardTimeSlotsService — Instant availability', () => {
     expect(result.deliverySlots.some((s: any) => s.isInstant)).toBe(false);
     // Non-Instant behaviour (Full Day fallback) is unaffected.
     expect(result.pickupSlots.some((s: any) => s.label === 'Full Day')).toBe(true);
+  });
+
+  it('hides every non-instant slot (including the Full Day fallback) when Scheduled service is disabled', async () => {
+    serviceAvailability.isScheduledAvailable.mockResolvedValue(false);
+
+    const result = await service.getAvailable('2026-07-12');
+
+    expect(result.pickupSlots.some((s: any) => s.label === 'Full Day')).toBe(false);
+    expect(result.deliverySlots.some((s: any) => s.label === 'Full Day')).toBe(false);
+    // Instant is unaffected by the Scheduled toggle.
+    expect(result.pickupSlots.some((s: any) => s.isInstant)).toBe(true);
   });
 });

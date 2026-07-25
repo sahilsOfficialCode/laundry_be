@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
+import { PricingUnit } from '../../pricing/pricing-unit.enum';
 
 export type LaundryServiceDocument = LaundryService & Document;
 
@@ -13,6 +14,10 @@ export class LaundryService {
 
   @Prop({ required: true })
   price!: number;
+
+  /** Billing unit this service is priced by — shown on the itemized bill (e.g. "2 kg", "3 pc"). */
+  @Prop({ type: String, enum: PricingUnit, default: PricingUnit.KG })
+  unit?: PricingUnit;
 
   /** Shown to customers browsing/booking this service via the Instant (same-day) flow. */
   @Prop({ required: true })
