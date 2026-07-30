@@ -12,6 +12,7 @@ import { PaymentsModule } from '../payments/payments.module';
 import { AuthModule } from '../auth/auth.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { CouponsModule } from '../coupons/coupons.module';
+import { InvoicesModule } from '../invoices/invoices.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { CouponsModule } from '../coupons/coupons.module';
     AuthModule,
     NotificationsModule,
     CouponsModule,
+    InvoicesModule,
   ],
   controllers: [WalletController],
   providers: [WalletService],

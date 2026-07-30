@@ -20,6 +20,7 @@ import { PaymentsService } from '../payments/payments.service';
 import { CreateAddMoneyOrderDto, VerifyAddMoneyDto } from './dto/add-money.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CouponsService } from '../coupons/services/coupons.service';
+import { InvoicesService } from '../invoices/invoices.service';
 
 @Injectable()
 export class WalletService {
@@ -35,6 +36,7 @@ export class WalletService {
     private readonly paymentsService: PaymentsService,
     private readonly notificationsService: NotificationsService,
     private readonly couponsService: CouponsService,
+    private readonly invoicesService: InvoicesService,
   ) {}
 
   // ── GET /wallet ────────────────────────────────────────────────────────────
@@ -281,6 +283,16 @@ export class WalletService {
         })
         .catch((e) => this.logger.error(`Coupon finalizeRedemption failed for order ${claimedOrder._id}: ${e.message}`));
     }
+
+    // Invoice generation (non-blocking) — mirrors the Razorpay path in
+    // PaymentFinalizationService. Wallet payments complete the order
+    // directly here rather than through that service (no Razorpay
+    // order/payment id to key off), so this call was missing entirely —
+    // wallet-paid orders never got an Invoice document, and "Download
+    // Invoice" never appeared for them on the customer app or admin panel.
+    this.invoicesService
+      .generateForOrder(claimedOrder)
+      .catch((e) => this.logger.error(`Invoice generation failed for order ${claimedOrder._id}: ${e.message}`));
 
     // Fire payment success push notification (non-blocking)
     this.notificationsService
