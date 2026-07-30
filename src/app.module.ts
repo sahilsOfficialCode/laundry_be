@@ -46,6 +46,12 @@ import { AccountDeletionModule } from './account-deletion/account-deletion.modul
 
 import { CouponsModule } from './coupons/coupons.module';
 
+import { PricingModule } from './pricing/pricing.module';
+
+import { InvoicesModule } from './invoices/invoices.module';
+
+import { ServiceAvailabilityModule } from './service-availability/service-availability.module';
+
 import { AppController } from './app.controller';
 
 
@@ -105,6 +111,12 @@ import { AppController } from './app.controller';
     AccountDeletionModule,
 
     CouponsModule,
+
+    PricingModule,
+
+    InvoicesModule,
+
+    ServiceAvailabilityModule,
 
   ],
 

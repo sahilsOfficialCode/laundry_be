@@ -12,6 +12,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentMetricsService } from './payment-metrics.service';
 import { PaymentAlertsService } from './payment-alerts.service';
 import { CouponsService } from '../coupons/services/coupons.service';
+import { InvoicesService } from '../invoices/invoices.service';
 
 export interface ApplyPaymentCapturedInput {
   razorpayOrderId: string;
@@ -56,6 +57,7 @@ export class PaymentFinalizationService {
     private metrics: PaymentMetricsService,
     private alerts: PaymentAlertsService,
     private couponsService: CouponsService,
+    private invoicesService: InvoicesService,
   ) {}
 
   async applyPaymentCaptured(input: ApplyPaymentCapturedInput): Promise<ApplyPaymentCapturedResult> {
@@ -179,6 +181,15 @@ export class PaymentFinalizationService {
             this.logger.error(`Coupon finalizeRedemption failed for order ${updated._id}: ${e.message}`),
           );
       }
+
+      // Invoice generation — fire-and-forget, same reasoning as the coupon
+      // redemption call above: a PDF/audit-trail failure must never undo or
+      // block the payment write that already succeeded.
+      this.invoicesService
+        .generateForOrder(updated)
+        .catch((e) =>
+          this.logger.error(`Invoice generation failed for order ${updated._id}: ${e.message}`),
+        );
 
       this.notificationsService
         .notifyPaymentSuccess(updated.userId, updated.orderNumber ?? '')

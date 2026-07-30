@@ -1,5 +1,6 @@
-import { IsArray, IsNumber, IsOptional, IsString, IsBoolean, IsIn, Min } from 'class-validator';
+import { IsArray, IsNumber, IsOptional, IsString, IsBoolean, IsIn, IsEnum, Min } from 'class-validator';
 import { CLOTH_TYPE_CATEGORIES, CLOTH_TYPE_SUBCATEGORIES } from './create-cloth-type.dto';
+import { PricingUnit } from '../../pricing/pricing-unit.enum';
 
 export class UpdateClothTypeDto {
   @IsOptional()
@@ -25,6 +26,10 @@ export class UpdateClothTypeDto {
   @IsNumber()
   @Min(0)
   discountScheduledRate?: number;
+
+  @IsOptional()
+  @IsEnum(PricingUnit)
+  unit?: PricingUnit;
 
   @IsOptional()
   @IsString()

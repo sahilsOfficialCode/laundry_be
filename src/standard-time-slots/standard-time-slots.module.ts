@@ -8,6 +8,7 @@ import {
 import { Order, OrderSchema } from '../orders/schemas/order.schema';
 import { StandardTimeSlotsService } from './standard-time-slots.service';
 import { StandardTimeSlotsController } from './standard-time-slots.controller';
+import { ServiceAvailabilityModule } from '../service-availability/service-availability.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { StandardTimeSlotsController } from './standard-time-slots.controller';
       { name: StandardTimeSlot.name, schema: StandardTimeSlotSchema },
       { name: Order.name, schema: OrderSchema },
     ]),
+    ServiceAvailabilityModule,
   ],
   controllers: [StandardTimeSlotsController],
   providers: [StandardTimeSlotsService],

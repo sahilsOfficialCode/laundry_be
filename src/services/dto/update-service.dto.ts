@@ -7,9 +7,11 @@ import {
   IsArray,
   IsIn,
   IsInt,
+  IsEnum,
   Min,
   Max,
 } from 'class-validator';
+import { PricingUnit } from '../../pricing/pricing-unit.enum';
 
 export class UpdateServiceDto {
   @IsOptional()
@@ -20,6 +22,10 @@ export class UpdateServiceDto {
   @IsNumber()
   @Min(0)
   price?: number;
+
+  @IsOptional()
+  @IsEnum(PricingUnit)
+  unit?: PricingUnit;
 
   @IsOptional()
   @IsString()

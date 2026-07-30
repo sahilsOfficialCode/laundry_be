@@ -1,4 +1,5 @@
-import { IsString, IsNumber, IsNotEmpty, IsOptional, IsBoolean, IsArray, IsIn, IsInt, Min, Max } from 'class-validator';
+import { IsString, IsNumber, IsNotEmpty, IsOptional, IsBoolean, IsArray, IsIn, IsInt, IsEnum, Min, Max } from 'class-validator';
+import { PricingUnit } from '../../pricing/pricing-unit.enum';
 
 export class CreateServiceDto {
   @IsString()
@@ -7,6 +8,10 @@ export class CreateServiceDto {
   @IsNumber()
   @Min(0)
   price?: number;
+
+  @IsOptional()
+  @IsEnum(PricingUnit)
+  unit?: PricingUnit;
 
   @IsString()
   @IsNotEmpty()

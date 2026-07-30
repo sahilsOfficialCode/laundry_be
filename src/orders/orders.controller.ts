@@ -8,12 +8,14 @@ import {
   Body,
   UseGuards,
   Query,
+  Req,
   HttpCode,
   HttpStatus,
   UploadedFiles,
   UseInterceptors,
   BadRequestException,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 
@@ -27,6 +29,7 @@ import { UserRole } from '../users/schemas/user.schema';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { CheckoutContextDto } from './dto/checkout-context.dto';
 import { UpdateDeliveryDetailsDto } from './dto/update-delivery-details.dto';
+import { getClientIp } from '../common/utils/get-client-ip.util';
 
 @Controller('orders')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -106,8 +109,27 @@ export class OrdersController {
   async updateOrderStatus(
     @Param('id') orderId: string,
     @Body() dto: UpdateOrderStatusDto,
+    @GetUser() admin: any,
+    @Req() req: Request,
   ) {
-    return this.ordersService.updateStatus(orderId, dto);
+    return this.ordersService.updateStatus(orderId, dto, {
+      adminId: admin.sub,
+      ip: getClientIp(req),
+    });
+  }
+
+  /** GET /orders/:id/pricing-snapshots — full pricing computation history for an order. */
+  @Get(':id/pricing-snapshots')
+  @Roles(UserRole.ADMIN)
+  async getPricingSnapshots(@Param('id') orderId: string) {
+    return this.ordersService.getPricingSnapshots(orderId);
+  }
+
+  /** GET /orders/:id/price-adjustments — admin price-override audit trail for an order. */
+  @Get(':id/price-adjustments')
+  @Roles(UserRole.ADMIN)
+  async getPriceAdjustments(@Param('id') orderId: string) {
+    return this.ordersService.getPriceAdjustments(orderId);
   }
 
   /**

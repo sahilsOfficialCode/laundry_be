@@ -54,8 +54,9 @@ import {
 } from './utils/location-utils';
 import {
   INSTANT_ORDER_UNAVAILABLE_MESSAGE,
-  isInstantAvailable,
+  SCHEDULED_ORDER_UNAVAILABLE_MESSAGE,
 } from '../common/instant-availability';
+import { ServiceAvailabilityService } from '../service-availability/service-availability.service';
 
 type RequestActor = {
   sub: string;
@@ -72,6 +73,7 @@ type LocationEligibilityReason =
   | 'NO_DELIVERY_SLOTS_AVAILABLE'
   | 'DAILY_CAPACITY_REACHED'
   | 'INSTANT_ORDERS_UNAVAILABLE'
+  | 'SCHEDULED_ORDERS_UNAVAILABLE'
   | 'LOCATION_NOT_FOUND';
 
 export type LocationValidationMessage = {
@@ -119,6 +121,7 @@ export class LocationsService implements OnModuleInit {
     private readonly orderModel: Model<OrderDocument>,
     @InjectModel(StandardTimeSlot.name)
     private readonly standardSlotModel: Model<StandardTimeSlotDocument>,
+    private readonly serviceAvailability: ServiceAvailabilityService,
   ) {}
 
   /**
@@ -624,9 +627,10 @@ export class LocationsService implements OnModuleInit {
     // This endpoint (checkout's slot/payment options) has its own slot list
     // separate from standard-time-slots.service.ts's — it wasn't injecting
     // the Instant meta-slot at all, so Instant carts never saw an Instant
-    // option here regardless of INSTANT_ORDER_CUTOFF_TIME. Mirror the same
-    // cutoff-gated injection used there.
-    const instantSlot = isInstantAvailable()
+    // option here regardless of the configured window. Mirror the same
+    // gated injection used there. Scheduled-service disable hides every
+    // non-instant slot, same rule as standard-time-slots.service.ts.
+    const instantSlot = (await this.serviceAvailability.isInstantAvailable())
       ? [{
           _id: 'instant',
           label: 'Instant',
@@ -636,9 +640,10 @@ export class LocationsService implements OnModuleInit {
           isInstant: true,
         }]
       : [];
+    const scheduledAvailable = await this.serviceAvailability.isScheduledAvailable();
 
-    const pickupSlots = [...instantSlot, ...adminPickupSlots];
-    const deliverySlots = [...instantSlot, ...adminDeliverySlots];
+    const pickupSlots = scheduledAvailable ? [...instantSlot, ...adminPickupSlots] : instantSlot;
+    const deliverySlots = scheduledAvailable ? [...instantSlot, ...adminDeliverySlots] : instantSlot;
 
     const paymentMethods: string[] =
       (loc.enabledPaymentMethods || []).length > 0
@@ -1119,16 +1124,25 @@ export class LocationsService implements OnModuleInit {
       }
     }
 
-    // Instant orders stop being accepted after today's cutoff (see
-    // INSTANT_ORDER_CUTOFF_TIME / isInstantAvailable). Reject here so a stale
-    // client that already had Instant selected can't bypass the UI cutoff.
+    // Instant/Scheduled service can each be disabled or windowed by admin.
+    // Reject here so a stale client that already had a now-unavailable
+    // option selected can't bypass the UI.
     const requestedSlots = [payload.pickupSlot, payload.deliverySlot]
       .filter((s): s is string => !!s)
       .map((s) => s.trim().toLowerCase());
-    if (requestedSlots.includes('instant') && !isInstantAvailable()) {
+    if (requestedSlots.includes('instant') && !(await this.serviceAvailability.isInstantAvailable())) {
       reasons.push({
         code: 'INSTANT_ORDERS_UNAVAILABLE',
         message: INSTANT_ORDER_UNAVAILABLE_MESSAGE,
+      });
+    }
+    if (
+      requestedSlots.some((s) => s !== 'instant') &&
+      !(await this.serviceAvailability.isScheduledAvailable())
+    ) {
+      reasons.push({
+        code: 'SCHEDULED_ORDERS_UNAVAILABLE',
+        message: SCHEDULED_ORDER_UNAVAILABLE_MESSAGE,
       });
     }
 
