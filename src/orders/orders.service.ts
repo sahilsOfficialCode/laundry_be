@@ -879,7 +879,9 @@ export class OrdersService {
 
   async findMyOrders(userId: string) {
 
-    return this.orderModel.find({ userId }).sort({ createdAt: -1 });
+    const orders = await this.orderModel.find({ userId }).sort({ createdAt: -1 });
+
+    return this.attachCustomerEta(orders);
 
   }
 
@@ -1002,19 +1004,14 @@ export class OrdersService {
   }
 
   /**
-   * Attaches customerName/customerPhone (looked up from Users), canAdminCancel
-   * (whether this order is an expired-Pending order eligible for admin
-   * cancellation), and SLA milestone/deadline/status (for the countdown UI)
-   * to order docs for admin display/printing.
+   * Batch-resolves the pickup-slot-end deadline for every ORDER_PLACED order
+   * in the list, keyed by order id — avoids a query per order (N+1) and a
+   * query entirely when none are pickup-pending. Shared by attachCustomerInfo
+   * (admin) and attachCustomerEta (customer) so the deadline logic used for
+   * cancellation-eligibility, the admin SLA countdown, and the customer ETA
+   * badge can never drift apart.
    */
-
-  private async attachCustomerInfo(orders: OrderDocument[]) {
-
-    const userMap = await this.usersService.findNamesByIds(orders.map((o) => o.userId));
-
-    // Batch-resolve pickup-slot end times only for orders that could
-    // actually be cancellation-eligible — avoids a query when none exist,
-    // and avoids one query per order (N+1) when several do.
+  private async resolvePickupDeadlines(orders: OrderDocument[]): Promise<Map<string, Date>> {
     const pendingLabels = [...new Set(
       orders
         .filter((o) => o.status === OrderStatus.ORDER_PLACED && o.pickupSlot)
@@ -1030,6 +1027,32 @@ export class OrdersService {
         .exec();
       slotEndTimeByLabel = new Map(slots.map((s) => [s.label.toLowerCase(), s.endTime]));
     }
+
+    const deadlines = new Map<string, Date>();
+    for (const o of orders) {
+      if (o.status !== OrderStatus.ORDER_PLACED || !o.pickupDate) continue;
+      const label = o.pickupSlot?.trim();
+      const endTime =
+        label && label.toLowerCase() !== 'instant'
+          ? slotEndTimeByLabel.get(label.toLowerCase()) ?? '23:59'
+          : '23:59';
+      deadlines.set(String(o._id), this.buildDeadlineDate(o.pickupDate.toISOString().slice(0, 10), endTime));
+    }
+    return deadlines;
+  }
+
+  /**
+   * Attaches customerName/customerPhone (looked up from Users), canAdminCancel
+   * (whether this order is an expired-Pending order eligible for admin
+   * cancellation), and SLA milestone/deadline/status (for the countdown UI)
+   * to order docs for admin display/printing.
+   */
+
+  private async attachCustomerInfo(orders: OrderDocument[]) {
+
+    const userMap = await this.usersService.findNamesByIds(orders.map((o) => o.userId));
+
+    const pickupDeadlines = await this.resolvePickupDeadlines(orders);
     const now = new Date();
 
     return orders.map((o) => {
@@ -1042,18 +1065,8 @@ export class OrdersService {
 
       plain.customerPhone = info?.mobileNumber;
 
-      let pickupDeadline: Date | null = null;
-      if (o.status === OrderStatus.ORDER_PLACED && o.pickupDate) {
-        const label = o.pickupSlot?.trim();
-        const endTime =
-          label && label.toLowerCase() !== 'instant'
-            ? slotEndTimeByLabel.get(label.toLowerCase()) ?? '23:59'
-            : '23:59';
-        pickupDeadline = this.buildDeadlineDate(o.pickupDate.toISOString().slice(0, 10), endTime);
-        plain.canAdminCancel = pickupDeadline <= now;
-      } else {
-        plain.canAdminCancel = false;
-      }
+      const pickupDeadline = pickupDeadlines.get(String(o._id)) ?? null;
+      plain.canAdminCancel = pickupDeadline !== null && pickupDeadline <= now;
 
       Object.assign(plain, this.computeSlaStatus(o, pickupDeadline, now));
 
@@ -1061,6 +1074,30 @@ export class OrdersService {
 
     });
 
+  }
+
+  /**
+   * Attaches a customer-friendly ETA (etaMilestone: 'PICKUP' | 'DELIVERY' |
+   * 'COMPLETION' | null, etaDeadline: Date | null) to order docs for the
+   * customer app's order list/detail. Reuses the same milestone/deadline
+   * resolution as the admin SLA countdown (computeSlaStatus), but
+   * deliberately omits slaStatus/OVERDUE — that label is an internal ops
+   * signal about the business missing its own deadline and isn't meant to
+   * be shown to the customer as an alarm; the app instead compares
+   * etaDeadline to now and softens the copy itself when running late.
+   */
+  private async attachCustomerEta(orders: OrderDocument[]) {
+    const pickupDeadlines = await this.resolvePickupDeadlines(orders);
+    const now = new Date();
+
+    return orders.map((o) => {
+      const plain: any = o.toObject ? o.toObject() : o;
+      const pickupDeadline = pickupDeadlines.get(String(o._id)) ?? null;
+      const { slaMilestone, slaDeadline } = this.computeSlaStatus(o, pickupDeadline, now);
+      plain.etaMilestone = slaMilestone;
+      plain.etaDeadline = slaDeadline;
+      return plain;
+    });
   }
 
   /**
@@ -1179,7 +1216,9 @@ export class OrdersService {
 
     if (!order) throw new NotFoundException('Order not found');
 
-    return order;
+    const [withEta] = await this.attachCustomerEta([order]);
+
+    return withEta;
 
   }
 
@@ -1573,6 +1612,8 @@ export class OrdersService {
         dto.status,
 
         updatedOrder.deliveryType,
+
+        updatedOrder.billAmount,
 
       )
 
