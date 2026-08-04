@@ -747,6 +747,8 @@ export class OrdersService {
 
       userId,
 
+      pickupType: savedOrder.pickupType,
+
     });
 
 
