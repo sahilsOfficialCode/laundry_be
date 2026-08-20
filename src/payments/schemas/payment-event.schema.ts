@@ -18,6 +18,8 @@ export enum PaymentEventOutcome {
   REJECTED_SIGNATURE = 'rejected_signature',
   REJECTED_AMOUNT_MISMATCH = 'rejected_amount_mismatch',
   REJECTED_ORDER_CANCELLED = 'rejected_order_cancelled',
+  /** Payment captured at Razorpay for a wallet top-up whose transaction was already marked FAILED (e.g. a prior signature-mismatch verify attempt) — never auto-credited, always routed to manual review. */
+  REJECTED_ALREADY_FAILED = 'rejected_already_failed',
   ORDER_NOT_FOUND = 'order_not_found',
   LOGGED_NO_TRANSITION = 'logged_no_transition',
   MALFORMED_PAYLOAD = 'malformed_payload',

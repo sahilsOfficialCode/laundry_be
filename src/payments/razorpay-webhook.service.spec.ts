@@ -9,6 +9,7 @@ describe('RazorpayWebhookService', () => {
   let paymentEventModel: { findOne: jest.Mock; create: jest.Mock };
   let metrics: PaymentMetricsService;
   let alerts: PaymentAlertsService;
+  let walletService: { applyTopUpCaptured: jest.Mock };
   let service: RazorpayWebhookService;
 
   beforeEach(() => {
@@ -25,12 +26,16 @@ describe('RazorpayWebhookService', () => {
     };
     metrics = new PaymentMetricsService();
     alerts = new PaymentAlertsService();
+    walletService = {
+      applyTopUpCaptured: jest.fn().mockResolvedValue({ applied: false, outcome: PaymentEventOutcome.ORDER_NOT_FOUND, txn: null }),
+    };
     service = new RazorpayWebhookService(
       paymentsService as any,
       paymentFinalization as any,
       metrics,
       alerts,
       paymentEventModel as any,
+      walletService as any,
     );
   });
 
@@ -117,5 +122,43 @@ describe('RazorpayWebhookService', () => {
     });
     expect(result.outcome).toBe('malformed_payload');
     expect(paymentFinalization.applyPaymentCaptured).not.toHaveBeenCalled();
+  });
+
+  it('falls back to WalletService when no Order matches the razorpayOrderId, so a wallet top-up actually gets credited', async () => {
+    paymentFinalization.applyPaymentCaptured.mockResolvedValue({ applied: false, outcome: PaymentEventOutcome.ORDER_NOT_FOUND, order: null });
+    walletService.applyTopUpCaptured.mockResolvedValue({ applied: true, outcome: PaymentEventOutcome.APPLIED, txn: {} });
+
+    const result = await service.handleDelivery({
+      rawBody: Buffer.from('x'),
+      signature: 'good-signature',
+      eventId: 'evt_7',
+      body: capturedPayload,
+    });
+
+    expect(paymentFinalization.applyPaymentCaptured).toHaveBeenCalledWith(
+      expect.objectContaining({ suppressNotFoundLog: true }),
+    );
+    expect(walletService.applyTopUpCaptured).toHaveBeenCalledWith(
+      expect.objectContaining({
+        razorpayOrderId: 'order_test123',
+        razorpayPaymentId: 'pay_abc',
+        amountPaise: 50000,
+        razorpayEventId: 'evt_7',
+      }),
+    );
+    expect(result.outcome).toBe(PaymentEventOutcome.APPLIED);
+  });
+
+  it('does not consult WalletService when the Order lookup already resolved the payment', async () => {
+    paymentFinalization.applyPaymentCaptured.mockResolvedValue({ applied: true, outcome: PaymentEventOutcome.APPLIED, order: {} });
+
+    await service.handleDelivery({
+      rawBody: Buffer.from('x'),
+      signature: 'good-signature',
+      eventId: 'evt_8',
+      body: capturedPayload,
+    });
+
+    expect(walletService.applyTopUpCaptured).not.toHaveBeenCalled();
   });
 });
