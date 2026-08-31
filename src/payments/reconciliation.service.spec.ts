@@ -24,8 +24,9 @@ describe('ReconciliationService', () => {
   let updateOneMock: jest.Mock;
   let findMock: jest.Mock;
   let configService: { get: jest.Mock };
+  let walletService: { findStalePendingTopUps: jest.Mock; applyTopUpCaptured: jest.Mock; markTopUpNeedsManualReview: jest.Mock };
 
-  function buildWithCandidates(candidates: any[]) {
+  function buildWithCandidates(candidates: any[], walletCandidates: any[] = []) {
     updateOneMock = jest.fn().mockResolvedValue({ matchedCount: 1 });
     findMock = jest.fn().mockReturnValue({ limit: () => Promise.resolve(candidates) });
     orderModel = {
@@ -38,6 +39,11 @@ describe('ReconciliationService', () => {
     metrics = new PaymentMetricsService();
     alerts = new PaymentAlertsService();
     configService = { get: jest.fn().mockReturnValue(undefined) };
+    walletService = {
+      findStalePendingTopUps: jest.fn().mockResolvedValue(walletCandidates),
+      applyTopUpCaptured: jest.fn(),
+      markTopUpNeedsManualReview: jest.fn().mockResolvedValue(undefined),
+    };
     service = new ReconciliationService(
       orderModel,
       paymentsService as any,
@@ -45,6 +51,7 @@ describe('ReconciliationService', () => {
       metrics,
       alerts,
       configService as any,
+      walletService as any,
     );
   }
 
@@ -159,6 +166,59 @@ describe('ReconciliationService', () => {
     await service.reconcilePendingPayments();
 
     expect(findMock).not.toHaveBeenCalled();
+  });
+
+  it('repairs a wallet top-up whose payment Razorpay reports as captured but our DB never learned about', async () => {
+    const txn = { _id: 'txn-1', razorpayOrderId: 'order_wallet123', createdAt: new Date(Date.now() - 15 * 60 * 1000), needsManualReview: false };
+    buildWithCandidates([], [txn]);
+    paymentsService.fetchOrderPayments.mockResolvedValue({
+      items: [{ id: 'pay_wallet_recovered', status: 'captured', amount: 69800 }],
+    });
+    walletService.applyTopUpCaptured.mockResolvedValue({ applied: true, outcome: 'applied', txn });
+
+    await service.reconcilePendingPayments();
+
+    expect(walletService.applyTopUpCaptured).toHaveBeenCalledWith(
+      expect.objectContaining({
+        razorpayOrderId: 'order_wallet123',
+        razorpayPaymentId: 'pay_wallet_recovered',
+        amountPaise: 69800,
+        source: 'reconciliation',
+      }),
+    );
+    expect(metrics.snapshot().counters['wallet_topup_reconciliation_repairs_total']).toBe(1);
+  });
+
+  it('leaves a genuinely still-pending wallet top-up alone (no captured payment at Razorpay yet, under 24h old)', async () => {
+    const txn = { _id: 'txn-2', razorpayOrderId: 'order_wallet456', createdAt: new Date(Date.now() - 15 * 60 * 1000), needsManualReview: false };
+    buildWithCandidates([], [txn]);
+    paymentsService.fetchOrderPayments.mockResolvedValue({ items: [] });
+
+    await service.reconcilePendingPayments();
+
+    expect(walletService.applyTopUpCaptured).not.toHaveBeenCalled();
+    expect(walletService.markTopUpNeedsManualReview).not.toHaveBeenCalled();
+  });
+
+  it('flags a wallet top-up needsManualReview after 24h with still no captured payment found', async () => {
+    const txn = { _id: 'txn-3', razorpayOrderId: 'order_wallet789', createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000), needsManualReview: false };
+    buildWithCandidates([], [txn]);
+    paymentsService.fetchOrderPayments.mockResolvedValue({ items: [] });
+
+    await service.reconcilePendingPayments();
+
+    expect(walletService.markTopUpNeedsManualReview).toHaveBeenCalledWith('txn-3', expect.any(String));
+  });
+
+  it('skips the wallet sweep entirely once the order sweep already tripped the shared circuit breaker', async () => {
+    const orders = Array.from({ length: 5 }, (_, i) => pendingOrder({ _id: `order-${i}`, razorpayOrderId: `order_rp_${i}` }));
+    const txn = { _id: 'txn-4', razorpayOrderId: 'order_wallet999', createdAt: new Date(Date.now() - 15 * 60 * 1000), needsManualReview: false };
+    buildWithCandidates(orders, [txn]);
+    paymentsService.fetchOrderPayments.mockRejectedValue(new Error('Razorpay API is down'));
+
+    await service.reconcilePendingPayments();
+
+    expect(walletService.applyTopUpCaptured).not.toHaveBeenCalled();
   });
 
   it('runs once on application bootstrap, and does not return a Promise Nest would block startup on', async () => {

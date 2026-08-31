@@ -25,6 +25,19 @@ export interface ApplyPaymentCapturedInput {
   requestId?: string;
   traceId?: string;
   rawPayload?: Record<string, any>;
+  /**
+   * When true, an ORDER_NOT_FOUND outcome skips writing a PaymentEvent. Used
+   * by the webhook handler, which falls back to WalletService.applyTopUpCaptured()
+   * when no Order matches — that fallback call reuses the same razorpayEventId,
+   * and the PaymentEvent collection enforces a UNIQUE index on it (the
+   * redelivery-dedup key). Logging here unconditionally would claim that slot
+   * with a throwaway "not found" row, silently swallow the wallet call's real
+   * outcome as an (incorrect) duplicate-event insert, AND — because the fast-path
+   * dedup check in RazorpayWebhookService runs before either call — make any
+   * later legitimate Razorpay retry of this same delivery see the event as
+   * already-processed and never even attempt the wallet fallback again.
+   */
+  suppressNotFoundLog?: boolean;
 }
 
 export interface ApplyPaymentCapturedResult {
@@ -67,11 +80,13 @@ export class PaymentFinalizationService {
     const order = await this.orderModel.findOne({ razorpayOrderId });
     if (!order) {
       this.metrics.increment('payments_order_not_found_total');
-      this.logEvent({
-        ...input,
-        outcome: PaymentEventOutcome.ORDER_NOT_FOUND,
-        processingDurationMs: Date.now() - startedAt,
-      }).catch(() => {});
+      if (!input.suppressNotFoundLog) {
+        this.logEvent({
+          ...input,
+          outcome: PaymentEventOutcome.ORDER_NOT_FOUND,
+          processingDurationMs: Date.now() - startedAt,
+        }).catch(() => {});
+      }
       return { applied: false, order: null, outcome: PaymentEventOutcome.ORDER_NOT_FOUND };
     }
 

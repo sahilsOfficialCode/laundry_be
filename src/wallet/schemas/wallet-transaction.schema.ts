@@ -88,6 +88,21 @@ export class WalletTransaction {
   /** Generic reference (referral id, refund id, ...) when not an order. */
   @Prop({ required: false, default: null, index: true })
   referenceId?: string;
+
+  // ── Reconciliation dead-letter (mirrors Order.needsManualReview) ────────────
+
+  /** Set once automatic repair has given up (amount mismatch, already-FAILED txn captured anyway, or no captured payment found after the lookback window) — stops the reconciliation sweep from re-checking this row forever. */
+  @Prop({ required: false, default: false, index: true })
+  needsManualReview?: boolean;
+
+  @Prop({ required: false, default: null })
+  needsManualReviewReason?: string;
+
+  // Not @Prop-decorated — these already exist on every document courtesy of
+  // `@Schema({ timestamps: true })` above; declaring them here just gives
+  // TypeScript visibility into fields Mongoose already populates at runtime.
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export const WalletTransactionSchema = SchemaFactory.createForClass(WalletTransaction);

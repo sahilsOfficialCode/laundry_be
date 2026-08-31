@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
@@ -11,12 +11,21 @@ import { PaymentEventSource } from './schemas/payment-event.schema';
 import { PaymentMetricsService } from './payment-metrics.service';
 import { PaymentAlertsService } from './payment-alerts.service';
 import { describeRazorpayError } from './razorpay-error.util';
+import { WalletService } from '../wallet/wallet.service';
+import { WalletTransactionDocument } from '../wallet/schemas/wallet-transaction.schema';
 
 const GRACE_PERIOD_MS = 2 * 60 * 1000; // don't touch orders that might still have a verify/webhook in flight
 const LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 const MANUAL_REVIEW_AFTER_MS = 24 * 60 * 60 * 1000;
 const MAX_ORDERS_PER_RUN = 200;
 const CONSECUTIVE_FAILURE_BREAKER_THRESHOLD = 5;
+
+// Wallet top-ups get a longer grace period than orders (10 vs 2 minutes) —
+// there's no checkout-abandonment UX pressure to resolve them fast, so it's
+// not worth cutting the window close to when a verify call would still
+// plausibly land.
+const WALLET_GRACE_PERIOD_MS = 10 * 60 * 1000;
+const MAX_WALLET_TXNS_PER_RUN = 200;
 
 /**
  * The safety net for when BOTH the client callback and the webhook are
@@ -26,6 +35,11 @@ const CONSECUTIVE_FAILURE_BREAKER_THRESHOLD = 5;
  * order attached, ask Razorpay directly what actually happened, and repair
  * through the same applyPaymentCaptured() path verify/webhook use. No
  * separate repair logic.
+ *
+ * Also sweeps wallet top-ups (WalletTransaction, via WalletService) the same
+ * way — same run, same circuit breaker, same bootstrap catch-up — so a
+ * top-up whose verify call AND webhook delivery were both lost gets the same
+ * safety net an order gets, instead of staying stuck PENDING forever.
  */
 @Injectable()
 export class ReconciliationService implements OnApplicationBootstrap {
@@ -39,6 +53,7 @@ export class ReconciliationService implements OnApplicationBootstrap {
     private metrics: PaymentMetricsService,
     private alerts: PaymentAlertsService,
     private configService: ConfigService,
+    @Inject(forwardRef(() => WalletService)) private walletService: WalletService,
   ) {}
 
   /**
@@ -84,8 +99,20 @@ export class ReconciliationService implements OnApplicationBootstrap {
         })
         .limit(MAX_ORDERS_PER_RUN);
 
-      this.logger.log(`Reconciliation run: ${candidates.length} pending order(s) to check`);
+      const walletCandidates = await this.walletService.findStalePendingTopUps(
+        WALLET_GRACE_PERIOD_MS,
+        LOOKBACK_MS,
+        MAX_WALLET_TXNS_PER_RUN,
+      );
 
+      this.logger.log(
+        `Reconciliation run: ${candidates.length} pending order(s), ${walletCandidates.length} pending wallet top-up(s) to check`,
+      );
+
+      // One shared breaker across both sweeps: a tripped breaker almost
+      // always means the Razorpay API itself is down, which affects orders
+      // and wallet top-ups identically — no reason to let one domain keep
+      // hammering a downed API just because the other tripped first.
       let consecutiveFailures = 0;
       for (let i = 0; i < candidates.length; i++) {
         const order = candidates[i];
@@ -103,10 +130,37 @@ export class ReconciliationService implements OnApplicationBootstrap {
               consecutiveFailures,
               remainingUnchecked: remaining,
             });
+            consecutiveFailures = -1; // sentinel: breaker already tripped, skip the wallet sweep below too
             break;
           }
         } else {
           consecutiveFailures = 0;
+        }
+      }
+
+      if (consecutiveFailures !== -1) {
+        for (let i = 0; i < walletCandidates.length; i++) {
+          const txn = walletCandidates[i];
+          const lookupSucceeded = await this.reconcileOneWalletTxn(txn);
+
+          if (!lookupSucceeded) {
+            consecutiveFailures++;
+            if (consecutiveFailures >= CONSECUTIVE_FAILURE_BREAKER_THRESHOLD) {
+              const remaining = walletCandidates.length - (i + 1);
+              this.logger.error(
+                `Reconciliation run aborted after ${consecutiveFailures} consecutive Razorpay lookup failures — ` +
+                  `likely a Razorpay API outage rather than a per-transaction issue; ${remaining} wallet top-up(s) left unchecked this run`,
+              );
+              this.alerts.raise('reconciliation_circuit_breaker_tripped', {
+                consecutiveFailures,
+                remainingUnchecked: remaining,
+                domain: 'wallet',
+              });
+              break;
+            }
+          } else {
+            consecutiveFailures = 0;
+          }
         }
       }
 
@@ -187,6 +241,63 @@ export class ReconciliationService implements OnApplicationBootstrap {
       // Isolate failures per-order so one bad write doesn't abort the whole
       // run for every other pending order. Not a Razorpay-outage signal.
       this.logger.error(`Reconciliation failed while applying repair for order ${order._id}: ${(err as Error).message}`);
+      return true;
+    }
+  }
+
+  /** Wallet-top-up counterpart of reconcileOne() above — same return-value contract (drives the shared circuit breaker). */
+  private async reconcileOneWalletTxn(txn: WalletTransactionDocument): Promise<boolean> {
+    let payments: any;
+    try {
+      payments = await this.paymentsService.fetchOrderPayments(txn.razorpayOrderId!);
+    } catch (err) {
+      this.logger.error(`Razorpay lookup failed for wallet txn ${txn._id}: ${describeRazorpayError(err)}`);
+      return false;
+    }
+
+    try {
+      const captured = payments?.items?.find((p: any) => p.status === 'captured');
+
+      if (!captured) {
+        const ageMs = Date.now() - (txn.createdAt ?? new Date()).getTime();
+        if (ageMs > MANUAL_REVIEW_AFTER_MS && !txn.needsManualReview) {
+          await this.walletService.markTopUpNeedsManualReview(
+            String(txn._id),
+            'No captured payment found at Razorpay after 24h of reconciliation attempts',
+          );
+          this.metrics.increment('wallet_topup_flagged_needs_review_total');
+          this.alerts.raise('wallet_topup_needs_manual_review', {
+            walletTxnId: txn._id.toString(),
+            razorpayOrderId: txn.razorpayOrderId,
+            ageMs,
+          });
+        }
+        return true;
+      }
+
+      const result = await this.walletService.applyTopUpCaptured({
+        razorpayOrderId: txn.razorpayOrderId!,
+        razorpayPaymentId: captured.id,
+        amountPaise: typeof captured.amount === 'number' ? captured.amount : undefined,
+        eventType: 'reconciliation.captured_found',
+        source: PaymentEventSource.RECONCILIATION,
+        requestId: randomUUID(),
+      });
+
+      if (result.applied) {
+        this.metrics.increment('wallet_topup_reconciliation_repairs_total');
+        this.alerts.raise('wallet_topup_reconciliation_repair', {
+          walletTxnId: txn._id.toString(),
+          razorpayOrderId: txn.razorpayOrderId,
+          razorpayPaymentId: captured.id,
+        });
+        this.logger.warn(
+          `Reconciliation repaired wallet top-up ${txn._id} — payment was captured at Razorpay but never reached this database (razorpayPaymentId=${captured.id})`,
+        );
+      }
+      return true;
+    } catch (err) {
+      this.logger.error(`Reconciliation failed while applying repair for wallet txn ${txn._id}: ${(err as Error).message}`);
       return true;
     }
   }
