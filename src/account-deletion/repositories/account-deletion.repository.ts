@@ -47,6 +47,7 @@ export class AccountDeletionRepository {
         $in: [
           DeleteRequestStatus.PENDING_VERIFICATION,
           DeleteRequestStatus.VERIFIED,
+          DeleteRequestStatus.PENDING_APPROVAL,
           DeleteRequestStatus.COMPLETED,
         ],
       },

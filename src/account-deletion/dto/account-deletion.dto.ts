@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsEnum,
   IsInt,
   IsMongoId,
@@ -12,6 +13,7 @@ import {
 } from 'class-validator';
 import {
   DeleteReason,
+  DeletionFlow,
   VerificationMethod,
 } from '../enums/account-deletion.enums';
 
@@ -24,6 +26,15 @@ export class RequestDeleteDto {
   @IsString()
   @MaxLength(500)
   comment?: string;
+
+  /**
+   * Which processing flow to use. Optional — omitting it keeps the historical
+   * behaviour (IMMEDIATE), so existing Android/Web clients are unaffected. The
+   * iOS client sends ADMIN_APPROVAL to park the request for admin review.
+   */
+  @IsOptional()
+  @IsEnum(DeletionFlow)
+  flow?: DeletionFlow;
 }
 
 /** POST /account/delete/verify — prove identity for an open request. */
@@ -63,6 +74,17 @@ export class ConfirmDeleteDto {
   @IsOptional()
   @IsString()
   verificationToken?: string;
+
+  /**
+   * Explicit, informed consent to forfeit any remaining wallet balance so
+   * deletion can proceed. Required only when the account has a non-zero
+   * balance — the user must be able to complete deletion in-app without a
+   * withdrawal feature, so unspent balance is forfeited on request rather
+   * than permanently blocking the account from being deleted.
+   */
+  @IsOptional()
+  @IsBoolean()
+  forfeitWalletBalance?: boolean;
 }
 
 /** POST /account/delete/send-otp — request an OTP for OTP verification. */

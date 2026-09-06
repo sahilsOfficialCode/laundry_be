@@ -95,6 +95,7 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
     }
+    this.rejectIfDeleted(user);
 
     if (userDto.role && user.role !== userDto.role) {
       throw new ForbiddenException(
@@ -103,6 +104,18 @@ export class AuthService {
     }
 
     return this.buildAuthResponse(user);
+  }
+
+  /**
+   * Reject sign-in for a soft-deleted account up front, with a clear message,
+   * instead of issuing a token that JwtAuthGuard.assertAccountActive would
+   * reject on the very next request anyway (deleted accounts stay deleted
+   * until the retention window elapses — see AccountDeletionService).
+   */
+  private rejectIfDeleted(user: any): void {
+    if (user?.isDeleted) {
+      throw new UnauthorizedException('This account has been deleted');
+    }
   }
 
   async sendMobileOtp(sendMobileOtpDto: SendMobileOtpDto) {
@@ -182,6 +195,7 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
+    this.rejectIfDeleted(user);
 
     this.mobileOtpStore.delete(mobileNumber);
 
@@ -377,6 +391,7 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
+    this.rejectIfDeleted(user);
 
     const sanitizedUser = user.toObject ? user.toObject() : user;
     return this.buildAuthResponse(sanitizedUser);

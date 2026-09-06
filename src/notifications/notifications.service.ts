@@ -365,6 +365,21 @@ export class NotificationsService {
     }
   }
 
+  /**
+   * Permanently delete every in-app notification record for a user.
+   * Called by the account-deletion cleanup job — notification history is
+   * per-user convenience data with no legal retention requirement.
+   */
+  async deleteAllForUser(userId: string): Promise<void> {
+    try {
+      await this.appNotificationModel.deleteMany({ userId });
+    } catch (err) {
+      this.logger.error(
+        `Failed to delete notifications for user ${userId}: ${(err as Error).message}`,
+      );
+    }
+  }
+
   // ── Order Status Notifications ──────────────────────────────────────────────
 
   async notifyOrderStatus(

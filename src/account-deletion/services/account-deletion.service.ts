@@ -11,8 +11,16 @@ import { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { User, UserDocument } from '../../users/schemas/user.schema';
+import {
+  WalletTransaction,
+  WalletTransactionDocument,
+  WalletTxnCategory,
+  WalletTxnStatus,
+  WalletTxnType,
+} from '../../wallet/schemas/wallet-transaction.schema';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { TokenBlacklistService } from '../../auth/token-blacklist.service';
+import { AuthService } from '../../auth/auth.service';
 import { AccountDeletionRepository } from '../repositories/account-deletion.repository';
 import { IdentityVerificationService } from './identity-verification.service';
 import {
@@ -24,6 +32,7 @@ import {
   AccountStatus,
   AuditAction,
   DeleteRequestStatus,
+  DeletionFlow,
 } from '../enums/account-deletion.enums';
 
 /** Request context passed from the controller (ip + current token). */
@@ -32,6 +41,18 @@ export interface DeletionContext {
   token?: string;
   tokenExp?: number; // ms
 }
+
+/**
+ * User-facing copy for the "your account has been permanently deleted"
+ * notification, sent from the single final deletion path (executeDeletion),
+ * regardless of whether deletion was triggered by the user (immediate flow)
+ * or by an admin approval (iOS flow).
+ */
+const ACCOUNT_DELETED_NOTIFICATION = {
+  title: 'Account deleted',
+  body: 'Your Laundrybrew account and associated data have been permanently deleted.',
+  type: 'account_deleted',
+} as const;
 
 @Injectable()
 export class AccountDeletionService {
@@ -50,10 +71,13 @@ export class AccountDeletionService {
   constructor(
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    @InjectModel(WalletTransaction.name)
+    private readonly walletTxnModel: Model<WalletTransactionDocument>,
     private readonly repo: AccountDeletionRepository,
     private readonly identityService: IdentityVerificationService,
     private readonly notifications: NotificationsService,
     private readonly tokenBlacklist: TokenBlacklistService,
+    private readonly authService: AuthService,
     private readonly configService: ConfigService,
   ) {
     this.retentionDays = Number(
@@ -80,12 +104,72 @@ export class AccountDeletionService {
       throw new ConflictException('Account is already deleted');
     }
 
-    // Re-use an in-progress request instead of creating duplicates.
+    // Re-use an in-progress request instead of creating duplicates (covers a
+    // parked PENDING_APPROVAL request too — see AccountDeletionRepository).
     const existing = await this.repo.findActiveByUser(userId);
     if (existing && existing.status !== DeleteRequestStatus.COMPLETED) {
-      return this.toStatus(existing);
+      return {
+        ...this.toStatus(existing),
+        pendingApproval:
+          existing.status === DeleteRequestStatus.PENDING_APPROVAL,
+        verificationRequired:
+          existing.status === DeleteRequestStatus.PENDING_VERIFICATION,
+        walletBalance: user.walletBalance ?? 0,
+      };
     }
 
+    // ── iOS: admin-approval flow ────────────────────────────────────────────
+    // The request is parked; the account is NOT touched (isDeleted stays
+    // false, the user keeps full access) beyond flagging accountStatus so the
+    // app can show a "Deletion Pending" state. An admin is notified and is the
+    // only actor who can execute the deletion (see AccountDeletionAdminService).
+    if (dto.flow === DeletionFlow.ADMIN_APPROVAL) {
+      const request = await this.repo.create({
+        userId,
+        userEmail: user.email,
+        userMobile: user.mobileNumber,
+        userName: user.name,
+        reason: dto.reason,
+        comment: dto.comment,
+        status: DeleteRequestStatus.PENDING_APPROVAL,
+      });
+
+      await this.userModel.updateOne(
+        { _id: userId },
+        { $set: { accountStatus: AccountStatus.PENDING_DELETION } },
+      );
+
+      await this.repo.writeAudit(AuditAction.DELETE_REQUESTED, userId, {
+        deleteRequestId: String(request._id),
+        actor: 'USER',
+        ipAddress: ctx.ipAddress,
+        message: `Delete requested — awaiting admin approval (${dto.reason})`,
+        meta: { flow: DeletionFlow.ADMIN_APPROVAL },
+      });
+
+      // Reuse the existing admin notification feed — no PII beyond the name,
+      // which the admin delete-requests dashboard already shows.
+      await this.notifications
+        .notifyAdmin({
+          title: 'Account deletion request',
+          body: `${user.name ?? 'A user'} requested account deletion. Review it in Delete Requests.`,
+          type: 'account_deletion_request',
+        })
+        .catch((e) =>
+          this.logger.error(
+            `notifyAdmin failed for delete request ${String(request._id)}: ${(e as Error).message}`,
+          ),
+        );
+
+      return {
+        ...this.toStatus(request),
+        pendingApproval: true,
+        verificationRequired: false,
+        walletBalance: user.walletBalance ?? 0,
+      };
+    }
+
+    // ── Android / Web: historical immediate flow (unchanged) ────────────────
     const request = await this.repo.create({
       userId,
       userEmail: user.email,
@@ -109,9 +193,32 @@ export class AccountDeletionService {
 
     return {
       ...this.toStatus(request),
+      pendingApproval: false,
       verificationRequired: this.requireVerification,
       walletBalance: user.walletBalance ?? 0,
     };
+  }
+
+  // ── Admin-approval flow: execute the deletion for a parked request ─────────
+
+  /**
+   * Runs the real, irreversible deletion for a request that was parked as
+   * PENDING_APPROVAL. Only ever called by AccountDeletionAdminService.approve()
+   * after an authenticated admin approves — never by the user. Delegates to the
+   * exact same executeDeletion() mechanics as the immediate flow.
+   */
+  async executeApprovedDeletion(
+    deleteRequestId: string,
+    adminId: string,
+  ): Promise<{ status: AccountStatus; deletedAt: Date; retentionUntil: Date }> {
+    const request = await this.repo.findById(deleteRequestId);
+    if (!request) throw new NotFoundException('Delete request not found');
+    if (request.status !== DeleteRequestStatus.PENDING_APPROVAL) {
+      throw new BadRequestException(
+        'This request is not awaiting approval',
+      );
+    }
+    return this.executeDeletion(request.userId, request, {}, `ADMIN:${adminId}`);
   }
 
   // ── POST /account/delete/verify ────────────────────────────────────────────
@@ -166,6 +273,14 @@ export class AccountDeletionService {
       throw new BadRequestException('No active delete request to confirm');
     }
 
+    // A request parked for admin approval (iOS flow) can only be executed by
+    // an admin — it must never be self-confirmable through this endpoint.
+    if (request.status === DeleteRequestStatus.PENDING_APPROVAL) {
+      throw new BadRequestException(
+        'This request is awaiting admin approval and cannot be confirmed here.',
+      );
+    }
+
     // Identity re-verification is only enforced when explicitly enabled.
     // The caller is already authenticated (valid JWT via JwtAuthGuard).
     if (this.requireVerification) {
@@ -194,13 +309,49 @@ export class AccountDeletionService {
     if (!user) throw new NotFoundException('User not found');
     if (user.isDeleted) throw new ConflictException('Account already deleted');
 
-    // Wallet may only be removed when empty — block if funds remain.
-    if ((user.walletBalance ?? 0) > 0) {
-      throw new BadRequestException(
-        `Your wallet holds ₹${user.walletBalance}. Please spend or withdraw it before deleting your account.`,
-      );
+    // There is no wallet withdrawal feature, so a non-zero balance must never
+    // permanently block deletion (the user has to be able to complete it
+    // in-app). The first confirm attempt surfaces the balance and asks for
+    // explicit consent to forfeit it; only once given does deletion proceed.
+    const walletBalance = user.walletBalance ?? 0;
+    if (walletBalance > 0 && !dto.forfeitWalletBalance) {
+      throw new BadRequestException({
+        code: 'WALLET_BALANCE_REMAINING',
+        walletBalance,
+        message: `Your wallet holds ₹${walletBalance}. Spend it first, or confirm again to forfeit the remaining balance and continue deleting your account.`,
+      });
     }
 
+    return this.executeDeletion(userId, request, ctx, 'USER');
+  }
+
+  // ── The single, final deletion path ───────────────────────────────────────
+
+  /**
+   * Performs the irreversible account deletion: soft-delete + revoke every
+   * session, forfeit any wallet balance, notify the user that deletion is
+   * complete, clear device tokens, mark the request COMPLETED and write the
+   * audit trail. This is the ONLY place the account is actually deleted; it is
+   * reached from the immediate flow (confirmDelete, actor 'USER') and from the
+   * admin-approval flow (executeApprovedDeletion, actor 'ADMIN:<id>').
+   *
+   * The wallet-balance consent check lives in confirmDelete, not here — by the
+   * time this runs, forfeiture is unconditional (decision B: the iOS request
+   * discloses it up front and the admin approval is the final consent).
+   */
+  private async executeDeletion(
+    userId: string,
+    request: any,
+    ctx: DeletionContext,
+    actor: 'USER' | `ADMIN:${string}`,
+  ): Promise<{ status: AccountStatus; deletedAt: Date; retentionUntil: Date; message: string }> {
+    const fresh = await this.userModel
+      .findById(userId)
+      .select('walletBalance isDeleted');
+    if (!fresh) throw new NotFoundException('User not found');
+    if (fresh.isDeleted) throw new ConflictException('Account already deleted');
+
+    const walletBalance = fresh.walletBalance ?? 0;
     const now = new Date();
     const retentionUntil = new Date(
       now.getTime() + this.retentionDays * 86_400_000,
@@ -218,20 +369,61 @@ export class AccountDeletionService {
           deletedReason: request.reason,
           deletedReasonComment: request.comment ?? null,
           sessionsValidFrom: now, // invalidates all existing JWTs (all devices)
+          ...(walletBalance > 0 ? { walletBalance: 0 } : {}),
         },
       },
     );
 
+    if (walletBalance > 0) {
+      await this.walletTxnModel.create({
+        userId,
+        type: WalletTxnType.DEBIT,
+        amount: walletBalance,
+        description: 'Wallet balance forfeited on account deletion',
+        status: WalletTxnStatus.COMPLETED,
+        category: WalletTxnCategory.DEBIT,
+        openingBalance: walletBalance,
+        closingBalance: 0,
+        createdBy: 'SYSTEM',
+      });
+      await this.repo.writeAudit(AuditAction.WALLET_FORFEITED, userId, {
+        deleteRequestId: String(request._id),
+        actor,
+        ipAddress: ctx.ipAddress,
+        message: `Wallet balance of ₹${walletBalance} forfeited on account deletion`,
+        meta: { walletBalance },
+      });
+    }
+
+    // Tell the user their deletion is complete — the real "account deleted"
+    // event, sent from this single final path (decision A). Must run BEFORE
+    // removeAllTokens so the push still has a device token to reach.
+    await this.notifications
+      .sendToUser(userId, { ...ACCOUNT_DELETED_NOTIFICATION })
+      .catch((e) =>
+        this.logger.error(
+          `account-deleted notification failed for ${userId}: ${(e as Error).message}`,
+        ),
+      );
+
     // Clear FCM/device tokens so no more pushes are sent.
     await this.notifications.removeAllTokens(userId).catch(() => undefined);
 
-    // Blacklist the caller's current token immediately (this device).
+    // Blacklist the caller's current token immediately (this device only —
+    // only present on the immediate flow; admin approval has no user token).
     if (ctx.token) this.tokenBlacklist.revoke(ctx.token, ctx.tokenExp);
+
+    // Drop the cached "account active" status so other devices are locked out
+    // within the cache TTL (the sessionsValidFrom set above is the durable gate).
+    this.authService.clearAccountStatusCache(userId);
 
     await this.repo.update(String(request._id), {
       status: DeleteRequestStatus.COMPLETED,
       confirmedAt: now,
       retentionUntil,
+      ...(actor.startsWith('ADMIN:')
+        ? { adminId: actor.slice('ADMIN:'.length), processedAt: now }
+        : {}),
       // token is single-use — invalidate it.
       verificationToken: null,
       verificationTokenExpiresAt: null,
@@ -239,9 +431,12 @@ export class AccountDeletionService {
 
     await this.repo.writeAudit(AuditAction.DELETE_CONFIRMED, userId, {
       deleteRequestId: String(request._id),
-      actor: 'USER',
+      actor,
       ipAddress: ctx.ipAddress,
-      message: 'Account soft-deleted; sessions revoked',
+      message:
+        actor === 'USER'
+          ? 'Account soft-deleted; sessions revoked'
+          : 'Account soft-deleted after admin approval; sessions revoked',
       meta: { retentionUntil },
     });
     await this.repo.writeAudit(AuditAction.SESSIONS_REVOKED, userId, {
@@ -261,9 +456,15 @@ export class AccountDeletionService {
   // ── GET /account/delete/status ─────────────────────────────────────────────
 
   async getStatus(userId: string) {
-    const request = await this.repo.findLatestByUser(userId);
-    if (!request) return { hasRequest: false };
-    return { hasRequest: true, ...this.toStatus(request) };
+    const [request, user] = await Promise.all([
+      this.repo.findLatestByUser(userId),
+      this.userModel.findById(userId).select('accountStatus isDeleted').lean(),
+    ]);
+    const accountStatus =
+      user?.accountStatus ??
+      (user?.isDeleted ? AccountStatus.DELETED : AccountStatus.ACTIVE);
+    if (!request) return { hasRequest: false, accountStatus };
+    return { hasRequest: true, accountStatus, ...this.toStatus(request) };
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────

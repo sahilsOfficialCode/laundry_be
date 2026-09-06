@@ -1,9 +1,16 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User, UserDocument } from '../../users/schemas/user.schema';
+import { NotificationsService } from '../../notifications/notifications.service';
 import { AccountDeletionRepository } from '../repositories/account-deletion.repository';
 import { AccountCleanupService } from './account-cleanup.service';
+import { AccountDeletionService } from './account-deletion.service';
 import {
   AccountStatus,
   AuditAction,
@@ -13,16 +20,26 @@ import { DeleteHistoryQueryDto } from '../dto/account-deletion.dto';
 
 /**
  * Admin-facing operations: browse/search delete requests, view timelines,
- * approve (force immediate anonymisation), reject (restore account), export,
- * and dashboard metrics.
+ * approve, reject (restore account), export, and dashboard metrics.
+ *
+ * approve() has two jobs depending on the request's state:
+ *  - PENDING_APPROVAL (iOS admin-approval flow) → run the real deletion
+ *    (delegates to AccountDeletionService.executeApprovedDeletion — the same
+ *    final path the immediate flow uses).
+ *  - COMPLETED (already soft-deleted) → force immediate anonymisation early,
+ *    instead of waiting for the retention-window cleanup job. Unchanged.
  */
 @Injectable()
 export class AccountDeletionAdminService {
+  private readonly logger = new Logger(AccountDeletionAdminService.name);
+
   constructor(
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
     private readonly repo: AccountDeletionRepository,
     private readonly cleanupService: AccountCleanupService,
+    private readonly deletionService: AccountDeletionService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ── GET /admin/delete/history ──────────────────────────────────────────────
@@ -68,23 +85,38 @@ export class AccountDeletionAdminService {
   async approve(deleteRequestId: string, adminId: string) {
     const request = await this.repo.findById(deleteRequestId);
     if (!request) throw new NotFoundException('Delete request not found');
-    if (request.status !== DeleteRequestStatus.COMPLETED) {
-      throw new NotFoundException(
-        'Only completed (soft-deleted) requests can be finalised',
+
+    // iOS admin-approval flow: the account is still live — this is the approval
+    // that actually deletes it. Runs the same final path as the immediate flow
+    // (soft-delete, session revocation, wallet forfeit, user notification,
+    // audit); the retention-window cleanup job anonymises later, as before.
+    if (request.status === DeleteRequestStatus.PENDING_APPROVAL) {
+      const result = await this.deletionService.executeApprovedDeletion(
+        deleteRequestId,
+        adminId,
       );
+      return { success: true, deleted: true, ...result };
     }
 
-    await this.cleanupService.anonymize(request as any);
-    await this.repo.update(deleteRequestId, {
-      adminId,
-      processedAt: new Date(),
-    });
-    await this.repo.writeAudit(AuditAction.CLEANUP_RAN, request.userId, {
-      deleteRequestId,
-      actor: `ADMIN:${adminId}`,
-      message: 'Admin forced immediate anonymisation',
-    });
-    return { success: true };
+    // Already soft-deleted (immediate flow, or a previously-approved request):
+    // fast-forward the anonymisation instead of waiting for the cleanup job.
+    if (request.status === DeleteRequestStatus.COMPLETED) {
+      await this.cleanupService.anonymize(request as any);
+      await this.repo.update(deleteRequestId, {
+        adminId,
+        processedAt: new Date(),
+      });
+      await this.repo.writeAudit(AuditAction.CLEANUP_RAN, request.userId, {
+        deleteRequestId,
+        actor: `ADMIN:${adminId}`,
+        message: 'Admin forced immediate anonymisation',
+      });
+      return { success: true, deleted: false, anonymised: true };
+    }
+
+    throw new BadRequestException(
+      `A request with status ${request.status} cannot be approved`,
+    );
   }
 
   // ── POST /admin/delete/reject — restore the account (if policy allows) ─────
@@ -128,6 +160,19 @@ export class AccountDeletionAdminService {
       actor: `ADMIN:${adminId}`,
       message: 'Account access restored (user must log in again)',
     });
+
+    // Let the user know their pending request was declined (best-effort).
+    await this.notifications
+      .sendToUser(request.userId, {
+        title: 'Account deletion request declined',
+        body: 'Your account deletion request was reviewed and declined. Your account remains active.',
+        type: 'account_deletion_declined',
+      })
+      .catch((e) =>
+        this.logger.error(
+          `reject notification failed for ${request.userId}: ${(e as Error).message}`,
+        ),
+      );
 
     return { success: true };
   }
