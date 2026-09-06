@@ -1,4 +1,5 @@
-import { IsArray, IsNumber, IsOptional, IsString, IsBoolean, IsIn, Min } from 'class-validator';
+import { IsArray, IsNumber, IsOptional, IsString, IsBoolean, IsIn, IsEnum, Min } from 'class-validator';
+import { PricingUnit } from '../../pricing/pricing-unit.enum';
 
 export const CLOTH_TYPE_CATEGORIES = [
   'ironing',
@@ -43,6 +44,10 @@ export class CreateClothTypeDto {
   @IsNumber()
   @Min(0)
   discountScheduledRate?: number;
+
+  @IsOptional()
+  @IsEnum(PricingUnit)
+  unit?: PricingUnit;
 
   @IsOptional()
   @IsString()

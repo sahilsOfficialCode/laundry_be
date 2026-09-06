@@ -48,7 +48,7 @@ export class SupportEventsService {
   }
 
   /** Notify all connected admins when a new order is placed. */
-  emitNewOrder(order: { _id: string; orderNumber: string; userId: string }) {
+  emitNewOrder(order: { _id: string; orderNumber: string; userId: string; pickupType?: string }) {
     if (!this.server) return;
     this.server.to('admins').emit('order:new', order);
   }

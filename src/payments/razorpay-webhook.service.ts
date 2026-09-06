@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { PaymentFinalizationService } from './payment-finalization.service';
 import { PaymentEventSource, PaymentEventOutcome } from './schemas/payment-event.schema';
@@ -7,6 +7,7 @@ import { PaymentAlertsService } from './payment-alerts.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { PaymentEvent, PaymentEventDocument } from './schemas/payment-event.schema';
+import { WalletService } from '../wallet/wallet.service';
 
 export interface WebhookDeliveryInput {
   rawBody: Buffer | undefined;
@@ -35,6 +36,7 @@ export class RazorpayWebhookService {
     private metrics: PaymentMetricsService,
     private alerts: PaymentAlertsService,
     @InjectModel(PaymentEvent.name) private paymentEventModel: Model<PaymentEventDocument>,
+    @Inject(forwardRef(() => WalletService)) private walletService: WalletService,
   ) {}
 
   async handleDelivery(input: WebhookDeliveryInput): Promise<{ received: boolean; outcome: string }> {
@@ -92,9 +94,32 @@ export class RazorpayWebhookService {
       razorpayEventId: eventId,
       requestId,
       rawPayload: body,
+      // Wallet fallback below reuses this same eventId to log the true
+      // outcome — see suppressNotFoundLog's doc comment.
+      suppressNotFoundLog: true,
     });
 
-    return { received: true, outcome: result.outcome };
+    // A captured payment's razorpayOrderId isn't necessarily an Order — it
+    // may be a wallet top-up, which only ever exists in WalletTransaction.
+    // Only fall back on ORDER_NOT_FOUND specifically: every other outcome
+    // (applied, noop, rejected-*) means the Order lookup DID match, so
+    // there's nothing left to try.
+    if (result.outcome !== PaymentEventOutcome.ORDER_NOT_FOUND) {
+      return { received: true, outcome: result.outcome };
+    }
+
+    const walletResult = await this.walletService.applyTopUpCaptured({
+      razorpayOrderId: paymentEntity.order_id,
+      razorpayPaymentId: paymentEntity.id,
+      amountPaise: typeof paymentEntity.amount === 'number' ? paymentEntity.amount : undefined,
+      eventType,
+      source: PaymentEventSource.WEBHOOK,
+      razorpayEventId: eventId,
+      requestId,
+      rawPayload: body,
+    });
+
+    return { received: true, outcome: walletResult.outcome };
   }
 
   private async logOnly(params: { eventId?: string; eventType: string; body: any; requestId?: string; error?: string }) {

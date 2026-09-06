@@ -22,6 +22,7 @@
     "backfill:service-descriptions": "ts-node -r tsconfig-paths/register scripts/backfill-service-descriptions.ts",
     "backfill:service-order-placed-messages": "ts-node -r tsconfig-paths/register scripts/backfill-service-order-placed-messages.ts",
     "backfill:service-durations": "ts-node -r tsconfig-paths/register scripts/backfill-service-durations.ts",
+    "backfill:invoices-for-paid-orders": "ts-node -r tsconfig-paths/register scripts/backfill-invoices-for-paid-orders.ts",
     "test:webhook": "ts-node -r tsconfig-paths/register scripts/test-webhook.ts"
   },
   "dependencies": {
@@ -44,6 +45,7 @@
     "libphonenumber-js": "^1.12.41",
     "mongoose": "^9.4.1",
     "morgan": "^1.10.1",
+    "pdfkit": "^0.15.2",
     "razorpay": "^2.9.6",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
@@ -62,6 +64,7 @@
     "@types/morgan": "^1.9.10",
     "@types/multer": "^1.4.12",
     "@types/node": "^24.0.0",
+    "@types/pdfkit": "^0.13.9",
     "@types/supertest": "^7.0.0",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",

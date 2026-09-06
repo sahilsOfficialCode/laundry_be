@@ -8,18 +8,20 @@ import {
   Body,
   UseGuards,
   Query,
+  Req,
   HttpCode,
   HttpStatus,
   UploadedFiles,
   UseInterceptors,
   BadRequestException,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 
 import { OrdersService, OrderPhotoType } from './orders.service';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
-import { OrderStatus } from './schemas/order.schema';
+import { ListOrdersQueryDto } from './dto/list-orders-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -27,6 +29,7 @@ import { UserRole } from '../users/schemas/user.schema';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { CheckoutContextDto } from './dto/checkout-context.dto';
 import { UpdateDeliveryDetailsDto } from './dto/update-delivery-details.dto';
+import { getClientIp } from '../common/utils/get-client-ip.util';
 
 @Controller('orders')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -40,14 +43,9 @@ export class OrdersController {
 
   @Get()
   @Roles(UserRole.ADMIN)
-  async getAllOrders(
-    @Query('page')      page:      number   = 1,
-    @Query('limit')     limit:     number   = 10,
-    @Query('status')    status?:   OrderStatus,
-    @Query('sortField') sortField?: string,
-    @Query('sortDir')   sortDir?:  'asc' | 'desc',
-  ) {
-    return this.ordersService.findAll(page, limit, status, sortField, sortDir);
+  async getAllOrders(@Query() query: ListOrdersQueryDto) {
+    const { page = 1, limit = 10, status, sortField, sortDir, search } = query;
+    return this.ordersService.findAll(page, limit, status, sortField, sortDir, search);
   }
 
   @Get('my')
@@ -111,8 +109,27 @@ export class OrdersController {
   async updateOrderStatus(
     @Param('id') orderId: string,
     @Body() dto: UpdateOrderStatusDto,
+    @GetUser() admin: any,
+    @Req() req: Request,
   ) {
-    return this.ordersService.updateStatus(orderId, dto);
+    return this.ordersService.updateStatus(orderId, dto, {
+      adminId: admin.sub,
+      ip: getClientIp(req),
+    });
+  }
+
+  /** GET /orders/:id/pricing-snapshots — full pricing computation history for an order. */
+  @Get(':id/pricing-snapshots')
+  @Roles(UserRole.ADMIN)
+  async getPricingSnapshots(@Param('id') orderId: string) {
+    return this.ordersService.getPricingSnapshots(orderId);
+  }
+
+  /** GET /orders/:id/price-adjustments — admin price-override audit trail for an order. */
+  @Get(':id/price-adjustments')
+  @Roles(UserRole.ADMIN)
+  async getPriceAdjustments(@Param('id') orderId: string) {
+    return this.ordersService.getPriceAdjustments(orderId);
   }
 
   /**

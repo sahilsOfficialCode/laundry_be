@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { PaymentsService } from './payments.service';
 import { PaymentsController } from './payments.controller';
@@ -13,6 +13,8 @@ import { ReconciliationService } from './reconciliation.service';
 import { PaymentMetricsService } from './payment-metrics.service';
 import { PaymentAlertsService } from './payment-alerts.service';
 import { CouponsModule } from '../coupons/coupons.module';
+import { InvoicesModule } from '../invoices/invoices.module';
+import { WalletModule } from '../wallet/wallet.module';
 
 @Module({
   imports: [
@@ -24,6 +26,13 @@ import { CouponsModule } from '../coupons/coupons.module';
     AuthModule,
     NotificationsModule,
     CouponsModule,
+    InvoicesModule,
+    // Wallet top-ups are a second, independent thing a Razorpay payment can
+    // be for — the webhook fallback and reconciliation sweep both need to
+    // hand off to WalletService when a razorpayOrderId isn't an Order.
+    // WalletModule imports PaymentsModule too (for PaymentsService), so this
+    // edge needs forwardRef() on both sides.
+    forwardRef(() => WalletModule),
   ],
   providers: [
     PaymentsService,
@@ -34,6 +43,6 @@ import { CouponsModule } from '../coupons/coupons.module';
     PaymentAlertsService,
   ],
   controllers: [PaymentsController],
-  exports: [PaymentsService, PaymentFinalizationService],
+  exports: [PaymentsService, PaymentFinalizationService, PaymentMetricsService, PaymentAlertsService],
 })
 export class PaymentsModule {}

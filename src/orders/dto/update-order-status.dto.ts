@@ -10,6 +10,8 @@ import {
 
   Min,
 
+  MaxLength,
+
   ValidateNested,
 
 } from 'class-validator';
@@ -109,6 +111,22 @@ export class UpdateOrderStatusDto {
 
 
   /**
+   * Reason for a manual admin price override — MANDATORY whenever billAmount
+   * is submitted and differs from the engine-calculated amount. Recorded in
+   * the PriceAdjustmentLog audit trail alongside the admin's id/ip/timestamp.
+   */
+
+  @IsOptional()
+
+  @IsString()
+
+  @MaxLength(500)
+
+  overrideReason?: string;
+
+
+
+  /**
 
    * Confirmed pickup time label — MANDATORY when advancing to ITEMIZED.
 
@@ -181,6 +199,18 @@ export class UpdateOrderStatusDto {
   @IsString()
 
   otp?: string;
+
+
+
+  /** Optional reason recorded when an admin cancels an order — status = CANCELLED. */
+
+  @IsOptional()
+
+  @IsString()
+
+  @MaxLength(500)
+
+  cancellationReason?: string;
 
 }
 

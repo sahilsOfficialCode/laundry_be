@@ -17,6 +17,7 @@ import {
   StandardTimeSlot,
   StandardTimeSlotSchema,
 } from '../standard-time-slots/schemas/standard-time-slot.schema';
+import { ServiceAvailabilityModule } from '../service-availability/service-availability.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import {
       { name: StandardTimeSlot.name, schema: StandardTimeSlotSchema },
     ]),
     AuthModule,
+    ServiceAvailabilityModule,
   ],
   controllers: [LocationsController],
   providers: [LocationsService],

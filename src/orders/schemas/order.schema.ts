@@ -98,7 +98,7 @@ export class Order {
 
 
 
-  @Prop({ type: [{ serviceId: String, serviceName: String, icon: String, quantity: Number, price: Number, category: String }] })
+  @Prop({ type: [{ serviceId: String, serviceName: String, icon: String, quantity: Number, price: Number, category: String, unit: String }] })
 
   items: {
 
@@ -115,6 +115,10 @@ export class Order {
     /** 'instant' | 'scheduled' — which type the user ordered */
 
     category?: string;
+
+    /** Billing unit snapshotted from the Service catalog at checkout time (e.g. 'kg', 'piece'). */
+
+    unit?: string;
 
   }[];
 
@@ -273,6 +277,18 @@ export class Order {
 
   needsManualReviewReason?: string;
 
+  // ── Cancellation audit ──────────────────────────────────────────────────
+
+  /** Admin userId who cancelled this order, when cancellation was admin-initiated (unset for customer self-cancellation). */
+  @Prop({ required: false })
+  cancelledBy?: string;
+
+  @Prop({ required: false })
+  cancelledAt?: Date;
+
+  @Prop({ required: false })
+  cancellationReason?: string;
+
 
 
   // ── Tracking fields ────────────────────────────────────────────────────────
@@ -402,6 +418,8 @@ export class Order {
         rate: { type: Number, required: true },
         amount: { type: Number, required: true },
         serviceType: { type: String, required: false },
+        serviceName: { type: String, required: false },
+        unit: { type: String, required: false },
       },
     ],
     default: [],
@@ -419,7 +437,17 @@ export class Order {
 
     amount: number;
 
+    /** Processing type this line was billed under — 'instant' | 'scheduled'. Reflects the admin's latest selection at itemization time. */
+
     serviceType?: string;
+
+    /** Service name (e.g. "Wash & Fold", "Dry Cleaning") snapshotted from ClothType.category at itemization time — immutable, never re-fetched, so later catalog renames don't alter historical orders/invoices. */
+
+    serviceName?: string;
+
+    /** Billing unit snapshotted from the ClothType catalog at itemization time (e.g. 'piece', 'pair'). */
+
+    unit?: string;
 
   }[];
 
@@ -430,6 +458,46 @@ export class Order {
   @Prop({ required: false })
 
   calculatedAmount?: number;
+
+  // ── Pricing engine breakdown (additive — absent on orders placed before
+  // this field existed; both frontends must fall back to the legacy
+  // totalAmount/billAmount-only display when these are undefined) ──────────
+
+  /** Id of the most recent OrderPricingSnapshot produced for this order. */
+  @Prop({ required: false })
+  latestPricingSnapshotId?: string;
+
+  /** GST amount included in the current total/bill. */
+  @Prop({ required: false, default: 0 })
+  taxAmount?: number;
+
+  /** Delivery fee included in the current total/bill (0 if order qualifies for free delivery). */
+  @Prop({ required: false, default: 0 })
+  deliveryFee?: number;
+
+  /** Flat platform fee included in the current total/bill. */
+  @Prop({ required: false, default: 0 })
+  platformFee?: number;
+
+  /** Flat payment-convenience fee included in the current total/bill. */
+  @Prop({ required: false, default: 0 })
+  convenienceFee?: number;
+
+  /** Flat packaging fee included in the current total/bill. */
+  @Prop({ required: false, default: 0 })
+  packagingFee?: number;
+
+  /** Wallet amount deducted from this order's payable total, if any. */
+  @Prop({ required: false, default: 0 })
+  walletDeductionAmount?: number;
+
+  /** Round-off applied to reach the final payable total, if rounding is enabled (0 otherwise). */
+  @Prop({ required: false, default: 0 })
+  roundingAdjustment?: number;
+
+  /** True once an admin has overridden the engine-calculated bill amount (see PriceAdjustmentLog for the audit trail). */
+  @Prop({ required: false, default: false })
+  isManuallyAdjusted?: boolean;
 
 
 

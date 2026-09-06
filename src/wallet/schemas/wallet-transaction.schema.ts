@@ -15,6 +15,16 @@ export enum WalletTxnStatus {
 }
 
 /**
+ * Statuses shown in user-facing wallet views (list, recent, summary).
+ * PENDING is an internal in-flight state (awaiting Razorpay callback/webhook)
+ * and is deliberately excluded everywhere this is used.
+ */
+export const VISIBLE_WALLET_TXN_STATUSES = [
+  WalletTxnStatus.COMPLETED,
+  WalletTxnStatus.FAILED,
+] as const;
+
+/**
  * Business category of a wallet movement. `type` (credit/debit) says which
  * direction money moved; `category` says WHY. Optional for backward
  * compatibility — rows written before this field existed have it null.
@@ -78,9 +88,30 @@ export class WalletTransaction {
   /** Generic reference (referral id, refund id, ...) when not an order. */
   @Prop({ required: false, default: null, index: true })
   referenceId?: string;
+
+  // ── Reconciliation dead-letter (mirrors Order.needsManualReview) ────────────
+
+  /** Set once automatic repair has given up (amount mismatch, already-FAILED txn captured anyway, or no captured payment found after the lookback window) — stops the reconciliation sweep from re-checking this row forever. */
+  @Prop({ required: false, default: false, index: true })
+  needsManualReview?: boolean;
+
+  @Prop({ required: false, default: null })
+  needsManualReviewReason?: string;
+
+  // Not @Prop-decorated — these already exist on every document courtesy of
+  // `@Schema({ timestamps: true })` above; declaring them here just gives
+  // TypeScript visibility into fields Mongoose already populates at runtime.
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export const WalletTransactionSchema = SchemaFactory.createForClass(WalletTransaction);
 
 // Wallet history is always queried per-user, newest first.
 WalletTransactionSchema.index({ userId: 1, createdAt: -1 });
+
+// User-facing list/history queries always filter to VISIBLE_WALLET_TXN_STATUSES
+// on top of the per-user sort above — this compound index lets Mongo satisfy
+// the equality (userId) + range (status $in) + sort (createdAt) in one pass
+// instead of scanning the {userId, createdAt} index and filtering in memory.
+WalletTransactionSchema.index({ userId: 1, status: 1, createdAt: -1 });

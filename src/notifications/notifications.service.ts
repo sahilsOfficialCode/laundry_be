@@ -365,6 +365,21 @@ export class NotificationsService {
     }
   }
 
+  /**
+   * Permanently delete every in-app notification record for a user.
+   * Called by the account-deletion cleanup job — notification history is
+   * per-user convenience data with no legal retention requirement.
+   */
+  async deleteAllForUser(userId: string): Promise<void> {
+    try {
+      await this.appNotificationModel.deleteMany({ userId });
+    } catch (err) {
+      this.logger.error(
+        `Failed to delete notifications for user ${userId}: ${(err as Error).message}`,
+      );
+    }
+  }
+
   // ── Order Status Notifications ──────────────────────────────────────────────
 
   async notifyOrderStatus(
@@ -372,6 +387,7 @@ export class NotificationsService {
     orderNumber: string,
     status: string,
     deliveryType: DeliveryType = DeliveryType.HOME_DELIVERY,
+    billAmount?: number,
   ): Promise<void> {
     const isSelfPickup = deliveryType === DeliveryType.SELF_PICKUP;
 
@@ -401,11 +417,17 @@ export class NotificationsService {
         body: `Your clothes for Order #${orderNumber} are ready for delivery.`,
         type: 'ready_for_delivery',
       },
-      ITEMIZED: {
-        title: 'Clothes Received ✅',
-        body: `Your clothes for Order #${orderNumber} have been received and itemized.`,
-        type: 'itemized',
-      },
+      ITEMIZED: billAmount != null
+        ? {
+            title: 'Bill Ready 🧾',
+            body: `Your bill for Order #${orderNumber} is ready — ₹${billAmount.toFixed(2)}. Open the app to view details and pay.`,
+            type: 'itemized',
+          }
+        : {
+            title: 'Clothes Received ✅',
+            body: `Your clothes for Order #${orderNumber} have been received and itemized.`,
+            type: 'itemized',
+          },
       PROCESSING: {
         title: 'Washing Started 🧺',
         body: `Your clothes for Order #${orderNumber} are being cleaned.`,

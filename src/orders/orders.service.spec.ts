@@ -18,12 +18,36 @@ import { ClothTypesService } from '../cloth-types/cloth-types.service';
 import { ReferralService } from '../referrals/services/referral.service';
 import { UsersService } from '../users/users.service';
 import { CouponsService } from '../coupons/services/coupons.service';
-import { isInstantAvailable } from '../common/instant-availability';
+import { PricingService, computeBreakdown } from '../pricing/pricing.service';
+import { ServiceAvailabilityService } from '../service-availability/service-availability.service';
 
-jest.mock('../common/instant-availability', () => ({
-  ...jest.requireActual('../common/instant-availability'),
-  isInstantAvailable: jest.fn().mockReturnValue(true),
-}));
+/** Zeroed config — matches production defaults, so checkout/itemization totals in these pre-existing tests are unaffected by the pricing engine. */
+const ZERO_PRICING_CONFIG = {
+  taxRatePercent: 0,
+  deliveryFeeAmount: 0,
+  freeDeliveryThreshold: 249,
+  platformFeeAmount: 0,
+  convenienceFeeAmount: 0,
+  packagingFeeAmount: 0,
+  maxOverridePercent: 30,
+};
+
+function mockPricingService() {
+  return {
+    getConfig: jest.fn().mockResolvedValue(ZERO_PRICING_CONFIG),
+    compute: jest.fn().mockImplementation((input: any) => computeBreakdown(input)),
+    recordSnapshot: jest.fn().mockResolvedValue({ _id: 'snapshot-1' }),
+    recordAdjustment: jest.fn().mockResolvedValue({ _id: 'adjustment-1' }),
+    getLatestSnapshot: jest.fn().mockResolvedValue(null),
+    getSnapshotsForOrder: jest.fn().mockResolvedValue([]),
+    getAdjustmentsForOrder: jest.fn().mockResolvedValue([]),
+  };
+}
+
+const serviceAvailabilityMock = {
+  isInstantAvailable: jest.fn().mockResolvedValue(true),
+  isScheduledAvailable: jest.fn().mockResolvedValue(true),
+};
 
 describe('OrdersService', () => {
   let service: OrdersService;
@@ -51,6 +75,8 @@ describe('OrdersService', () => {
         { provide: ReferralService, useValue: {} },
         { provide: UsersService, useValue: {} },
         { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: mockPricingService() },
+        { provide: ServiceAvailabilityService, useValue: serviceAvailabilityMock },
       ],
     }).compile();
 
@@ -159,6 +185,8 @@ describe('OrdersService — checkout delivery-date computation', () => {
         { provide: ReferralService, useValue: {} },
         { provide: UsersService, useValue: {} },
         { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: mockPricingService() },
+        { provide: ServiceAvailabilityService, useValue: serviceAvailabilityMock },
       ],
     }).compile();
 
@@ -244,11 +272,11 @@ describe('OrdersService — checkout delivery-date computation', () => {
 
   describe('Instant cutoff at checkout', () => {
     afterEach(() => {
-      (isInstantAvailable as jest.Mock).mockReturnValue(true);
+      serviceAvailabilityMock.isInstantAvailable.mockResolvedValue(true);
     });
 
     it('rejects an Instant checkout after cutoff', async () => {
-      (isInstantAvailable as jest.Mock).mockReturnValue(false);
+      serviceAvailabilityMock.isInstantAvailable.mockResolvedValue(false);
       const { service } = await buildService({ category: 'instant' });
 
       await expect(
@@ -266,7 +294,7 @@ describe('OrdersService — checkout delivery-date computation', () => {
     // off the cart's item category, not the slot label the client happens to
     // send — see orders.service.ts's `orderItems.some(i => i.category === 'instant')`.
     it('rejects an Instant cart after cutoff even when the client sends a non-"instant" slot label', async () => {
-      (isInstantAvailable as jest.Mock).mockReturnValue(false);
+      serviceAvailabilityMock.isInstantAvailable.mockResolvedValue(false);
       const { service } = await buildService({ category: 'instant' });
 
       await expect(
@@ -279,7 +307,7 @@ describe('OrdersService — checkout delivery-date computation', () => {
     });
 
     it('does not affect scheduled checkout after cutoff', async () => {
-      (isInstantAvailable as jest.Mock).mockReturnValue(false);
+      serviceAvailabilityMock.isInstantAvailable.mockResolvedValue(false);
       const { service } = await buildService({ category: 'scheduled' });
 
       const order = await service.checkout('user-1', {
@@ -292,7 +320,7 @@ describe('OrdersService — checkout delivery-date computation', () => {
     });
 
     it('allows an Instant checkout before cutoff', async () => {
-      (isInstantAvailable as jest.Mock).mockReturnValue(true);
+      serviceAvailabilityMock.isInstantAvailable.mockResolvedValue(true);
       const { service } = await buildService({ category: 'instant' });
 
       const order = await service.checkout('user-1', {
@@ -376,6 +404,8 @@ describe('OrdersService — DIRECT_SELECTION (Drop at Shop) location assignment'
         { provide: ReferralService, useValue: {} },
         { provide: UsersService, useValue: {} },
         { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: mockPricingService() },
+        { provide: ServiceAvailabilityService, useValue: serviceAvailabilityMock },
       ],
     }).compile();
 
@@ -566,6 +596,8 @@ describe('OrdersService + LocationsService — integration (location assignment)
         { provide: ReferralService, useValue: {} },
         { provide: UsersService, useValue: {} },
         { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: mockPricingService() },
+        { provide: ServiceAvailabilityService, useValue: serviceAvailabilityMock },
       ],
     }).compile();
 
@@ -817,6 +849,8 @@ describe('OrdersService — findAssignedToPartner customer contact exposure', ()
         { provide: ReferralService, useValue: {} },
         { provide: UsersService, useValue: { findNamesByIds } },
         { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: mockPricingService() },
+        { provide: ServiceAvailabilityService, useValue: serviceAvailabilityMock },
       ],
     }).compile();
 
@@ -850,5 +884,434 @@ describe('OrdersService — findAssignedToPartner customer contact exposure', ()
     expect(serialized.toLowerCase()).not.toContain('leaked');
     expect(serialized.toLowerCase()).not.toContain('should never appear');
     expect(Object.keys(result.active[0].customer).sort()).toEqual(['address', 'name', 'phone']);
+  });
+});
+
+describe('OrdersService — updateStatus ITEMIZED: pricing engine + admin override audit trail', () => {
+  const CLOTH_TYPE = {
+    _id: { toString: () => 'cloth-1' },
+    name: 'Shirt',
+    category: 'washFold',
+    instantRate: 20,
+    scheduledRate: 15,
+    discountInstantRate: undefined,
+    discountScheduledRate: undefined,
+  };
+
+  function makeOrderDoc(overrides: Record<string, any> = {}) {
+    const doc: any = {
+      _id: 'order-1',
+      userId: 'user-1',
+      items: [{ serviceId: 'service-1', serviceName: 'Wash', quantity: 1, price: 100, category: 'instant' }],
+      status: 'PICKUP_ASSIGNED',
+      statusHistory: [],
+      deliveryType: DeliveryType.HOME_DELIVERY,
+      ...overrides,
+    };
+    doc.save = jest.fn().mockImplementation(async () => doc);
+    return doc;
+  }
+
+  async function buildService(opts: {
+    orderDoc: any;
+    pricing?: ReturnType<typeof mockPricingService>;
+    referralEnabled?: boolean;
+  }) {
+    const pricing = opts.pricing ?? mockPricingService();
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrdersService,
+        { provide: getModelToken(Order.name), useValue: { findById: jest.fn().mockResolvedValue(opts.orderDoc) } },
+        { provide: getModelToken(Cart.name), useValue: {} },
+        { provide: getModelToken(LaundryService.name), useValue: {} },
+        { provide: getModelToken(StandardTimeSlot.name), useValue: {} },
+        { provide: LocationsService, useValue: {} },
+        { provide: ServiceZonesService, useValue: {} },
+        {
+          provide: NotificationsService,
+          useValue: { notifyOrderStatus: jest.fn().mockResolvedValue(undefined), notifyAdmin: jest.fn().mockResolvedValue(undefined) },
+        },
+        { provide: SupportEventsService, useValue: { emitOrderUpdated: jest.fn() } },
+        { provide: UploadService, useValue: {} },
+        { provide: ClothTypesService, useValue: { findByIds: jest.fn().mockResolvedValue([CLOTH_TYPE]) } },
+        {
+          provide: ReferralService,
+          useValue: { getFirstOrderIncentiveConfig: jest.fn().mockResolvedValue({ enabled: opts.referralEnabled ?? false }) },
+        },
+        { provide: UsersService, useValue: { findNamesByIds: jest.fn().mockResolvedValue(new Map()) } },
+        { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: pricing },
+        { provide: ServiceAvailabilityService, useValue: serviceAvailabilityMock },
+      ],
+    }).compile();
+
+    return { service: module.get<OrdersService>(OrdersService), pricing };
+  }
+
+  it('no override: billAmount equals the cloth-type calculated amount, no PriceAdjustmentLog written', async () => {
+    const orderDoc = makeOrderDoc();
+    const { service, pricing } = await buildService({ orderDoc });
+
+    const updated = await service.updateStatus(
+      'order-1',
+      { status: 'ITEMIZED' as any, clothTypeBreakdown: [{ clothTypeId: 'cloth-1', quantity: 2 } as any] },
+      { adminId: 'admin-1', ip: '1.2.3.4' },
+    );
+
+    expect(updated.billAmount).toBe(40); // 2 * instantRate(20)
+    expect(updated.isManuallyAdjusted).toBeFalsy();
+    expect(pricing.recordAdjustment).not.toHaveBeenCalled();
+  });
+
+  it('copies ClothType.category into serviceName on the saved breakdown line, and stores the admin-selected serviceType', async () => {
+    const orderDoc = makeOrderDoc();
+    const { service } = await buildService({ orderDoc });
+
+    const updated = await service.updateStatus(
+      'order-1',
+      { status: 'ITEMIZED' as any, clothTypeBreakdown: [{ clothTypeId: 'cloth-1', quantity: 2, serviceType: 'scheduled' } as any] },
+      { adminId: 'admin-1', ip: '1.2.3.4' },
+    );
+
+    expect(updated.clothTypeBreakdown).toHaveLength(1);
+    expect(updated.clothTypeBreakdown[0]).toMatchObject({
+      clothTypeName: 'Shirt',
+      serviceName: 'washFold', // copied from ClothType.category, not fetched dynamically
+      serviceType: 'scheduled', // admin's explicit selection, not the order's default
+    });
+  });
+
+  it('override without a reason is rejected before any pricing snapshot or audit log is written', async () => {
+    const orderDoc = makeOrderDoc();
+    const { service, pricing } = await buildService({ orderDoc });
+
+    await expect(
+      service.updateStatus(
+        'order-1',
+        { status: 'ITEMIZED' as any, clothTypeBreakdown: [{ clothTypeId: 'cloth-1', quantity: 2 } as any], billAmount: 999 },
+        { adminId: 'admin-1', ip: '1.2.3.4' },
+      ),
+    ).rejects.toThrow('A reason is required');
+
+    expect(pricing.recordSnapshot).not.toHaveBeenCalled();
+    expect(pricing.recordAdjustment).not.toHaveBeenCalled();
+  });
+
+  it('override with a reason succeeds, sets billAmount to the override, and records the audit trail with adminId/ip/diff', async () => {
+    const orderDoc = makeOrderDoc();
+    const { service, pricing } = await buildService({ orderDoc });
+
+    const updated = await service.updateStatus(
+      'order-1',
+      {
+        status: 'ITEMIZED' as any,
+        clothTypeBreakdown: [{ clothTypeId: 'cloth-1', quantity: 2 } as any],
+        billAmount: 100,
+        overrideReason: 'Extra stains, re-wash required',
+      },
+      { adminId: 'admin-1', ip: '1.2.3.4' },
+    );
+
+    expect(updated.billAmount).toBe(100); // calculatedAmount was 40
+    expect(updated.isManuallyAdjusted).toBe(true);
+    expect(pricing.recordAdjustment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderId: 'order-1',
+        previousAmount: 40,
+        newAmount: 100,
+        reason: 'Extra stains, re-wash required',
+        adminId: 'admin-1',
+        ipAddress: '1.2.3.4',
+      }),
+    );
+  });
+
+  it('an override beyond maxOverridePercent still succeeds but flags the order for manual review', async () => {
+    const orderDoc = makeOrderDoc();
+    const pricing = mockPricingService();
+    pricing.getConfig.mockResolvedValue({
+      taxRatePercent: 0,
+      deliveryFeeAmount: 0,
+      freeDeliveryThreshold: 249,
+      platformFeeAmount: 0,
+      convenienceFeeAmount: 0,
+      packagingFeeAmount: 0,
+      maxOverridePercent: 10, // tight threshold so a 150% jump trips it
+    });
+    const { service } = await buildService({ orderDoc, pricing });
+
+    const updated = await service.updateStatus(
+      'order-1',
+      {
+        status: 'ITEMIZED' as any,
+        clothTypeBreakdown: [{ clothTypeId: 'cloth-1', quantity: 2 } as any], // calculated = 40
+        billAmount: 100, // +150%
+        overrideReason: 'Manager-approved adjustment',
+      },
+      { adminId: 'admin-1', ip: '1.2.3.4' },
+    );
+
+    expect(updated.billAmount).toBe(100);
+    expect(updated.needsManualReview).toBe(true);
+    expect(updated.needsManualReviewReason).toMatch(/exceeds the 10% threshold/);
+  });
+});
+
+describe('OrdersService — admin cancellation of expired Pending orders', () => {
+  function makeOrderDoc(overrides: Record<string, any> = {}) {
+    const doc: any = {
+      _id: 'order-1',
+      userId: 'user-1',
+      status: 'ORDER_PLACED',
+      statusHistory: [],
+      pickupDate: new Date('2026-07-10T00:00:00.000Z'),
+      pickupSlot: 'Morning',
+      ...overrides,
+    };
+    doc.save = jest.fn().mockImplementation(async () => doc);
+    return doc;
+  }
+
+  async function buildService(opts: { orderDoc: any; slot?: any; loseRace?: boolean }) {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrdersService,
+        {
+          provide: getModelToken(Order.name),
+          useValue: {
+            findById: jest.fn().mockResolvedValue(opts.orderDoc),
+            // Simulates the atomic conditional update: normally "succeeds" and
+            // applies the write to the same fake document findById returned;
+            // loseRace simulates another concurrent request having already
+            // changed the status, so the guard finds no match.
+            findOneAndUpdate: jest.fn().mockImplementation(async (_filter: any, update: any) => {
+              if (opts.loseRace) return null;
+              Object.assign(opts.orderDoc, update.$set);
+              if (update.$push?.statusHistory) {
+                opts.orderDoc.statusHistory = [...(opts.orderDoc.statusHistory ?? []), update.$push.statusHistory];
+              }
+              return opts.orderDoc;
+            }),
+          },
+        },
+        { provide: getModelToken(Cart.name), useValue: {} },
+        { provide: getModelToken(LaundryService.name), useValue: {} },
+        {
+          provide: getModelToken(StandardTimeSlot.name),
+          useValue: {
+            findOne: jest.fn().mockReturnValue({
+              select: jest.fn().mockReturnThis(),
+              lean: jest.fn().mockReturnThis(),
+              exec: jest.fn().mockResolvedValue(opts.slot ?? null),
+            }),
+          },
+        },
+        { provide: LocationsService, useValue: {} },
+        { provide: ServiceZonesService, useValue: {} },
+        {
+          provide: NotificationsService,
+          useValue: { notifyOrderStatus: jest.fn().mockResolvedValue(undefined), notifyAdmin: jest.fn().mockResolvedValue(undefined) },
+        },
+        { provide: SupportEventsService, useValue: { emitOrderUpdated: jest.fn() } },
+        { provide: UploadService, useValue: {} },
+        { provide: ClothTypesService, useValue: {} },
+        { provide: ReferralService, useValue: {} },
+        { provide: UsersService, useValue: { findNamesByIds: jest.fn().mockResolvedValue(new Map()) } },
+        { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: mockPricingService() },
+        { provide: ServiceAvailabilityService, useValue: serviceAvailabilityMock },
+      ],
+    }).compile();
+
+    return { service: module.get<OrdersService>(OrdersService) };
+  }
+
+  it('rejects cancelling a Pending order before its pickup window has passed', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-07-10T05:00:00.000Z')); // 10:30 IST, before 18:00 slot end
+    try {
+      const orderDoc = makeOrderDoc();
+      const { service } = await buildService({ orderDoc, slot: { endTime: '18:00' } });
+
+      await expect(
+        service.updateStatus('order-1', { status: 'CANCELLED' as any }, { adminId: 'admin-1' }),
+      ).rejects.toThrow('cannot be cancelled yet');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('allows cancelling a Pending order once its pickup window has passed, recording who/when/why', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-07-10T20:00:00.000Z')); // 01:30 IST next day, after 18:00 slot end
+    try {
+      const orderDoc = makeOrderDoc();
+      const { service } = await buildService({ orderDoc, slot: { endTime: '18:00' } });
+
+      const updated = await service.updateStatus(
+        'order-1',
+        { status: 'CANCELLED' as any, cancellationReason: 'Customer no-show' },
+        { adminId: 'admin-1', ip: '1.2.3.4' },
+      );
+
+      expect(updated.status).toBe('CANCELLED');
+      expect(updated.cancelledBy).toBe('admin-1');
+      expect(updated.cancelledAt).toBeInstanceOf(Date);
+      expect(updated.cancellationReason).toBe('Customer no-show');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('falls back to end-of-day deadline when no matching slot exists (e.g. Instant)', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-07-10T10:00:00.000Z')); // well before end of day IST
+    try {
+      const orderDoc = makeOrderDoc({ pickupSlot: 'instant' });
+      const { service } = await buildService({ orderDoc, slot: null });
+
+      await expect(
+        service.updateStatus('order-1', { status: 'CANCELLED' as any }, { adminId: 'admin-1' }),
+      ).rejects.toThrow('cannot be cancelled yet');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not deadline-gate cancelling an already-assigned (PICKUP_ASSIGNED) order', async () => {
+    const orderDoc = makeOrderDoc({ status: 'PICKUP_ASSIGNED' });
+    const { service } = await buildService({ orderDoc, slot: null });
+
+    const updated = await service.updateStatus(
+      'order-1',
+      { status: 'CANCELLED' as any },
+      { adminId: 'admin-1' },
+    );
+
+    expect(updated.status).toBe('CANCELLED');
+    expect(updated.cancelledBy).toBe('admin-1');
+  });
+
+  it('rejects a cancel that loses the race to a concurrent update (atomic guard)', async () => {
+    const orderDoc = makeOrderDoc({ status: 'PICKUP_ASSIGNED' });
+    const { service } = await buildService({ orderDoc, slot: null, loseRace: true });
+
+    await expect(
+      service.updateStatus('order-1', { status: 'CANCELLED' as any }, { adminId: 'admin-1' }),
+    ).rejects.toThrow('already updated by another request');
+  });
+});
+
+describe('OrdersService — SLA milestone/deadline/status', () => {
+  async function buildService(orderDoc: any) {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrdersService,
+        { provide: getModelToken(Order.name), useValue: { findById: jest.fn().mockResolvedValue(orderDoc) } },
+        { provide: getModelToken(Cart.name), useValue: {} },
+        { provide: getModelToken(LaundryService.name), useValue: {} },
+        {
+          provide: getModelToken(StandardTimeSlot.name),
+          useValue: {
+            findOne: jest.fn().mockReturnValue({
+              select: jest.fn().mockReturnThis(),
+              lean: jest.fn().mockReturnThis(),
+              exec: jest.fn().mockResolvedValue({ endTime: '18:00' }),
+            }),
+            find: jest.fn().mockReturnValue({
+              select: jest.fn().mockReturnThis(),
+              lean: jest.fn().mockReturnThis(),
+              exec: jest.fn().mockResolvedValue([{ label: 'Evening', endTime: '18:00' }]),
+            }),
+          },
+        },
+        { provide: LocationsService, useValue: {} },
+        { provide: ServiceZonesService, useValue: {} },
+        { provide: NotificationsService, useValue: {} },
+        { provide: SupportEventsService, useValue: {} },
+        { provide: UploadService, useValue: {} },
+        { provide: ClothTypesService, useValue: {} },
+        { provide: ReferralService, useValue: {} },
+        { provide: UsersService, useValue: { findNamesByIds: jest.fn().mockResolvedValue(new Map()) } },
+        { provide: CouponsService, useValue: { validateForUser: jest.fn() } },
+        { provide: PricingService, useValue: mockPricingService() },
+        { provide: ServiceAvailabilityService, useValue: serviceAvailabilityMock },
+      ],
+    }).compile();
+
+    return { service: module.get<OrdersService>(OrdersService) };
+  }
+
+  it('Instant order: milestone is COMPLETION, deadline is deliveryDate', async () => {
+    const { service } = await buildService({
+      _id: 'order-1',
+      userId: 'user-1',
+      status: 'PROCESSING',
+      items: [{ category: 'instant' }],
+      deliveryDate: new Date(Date.now() + 60 * 60 * 1000), // 1h from now
+    });
+
+    const order = await service.findByIdAdmin('order-1');
+
+    expect(order.slaMilestone).toBe('COMPLETION');
+    expect(order.slaStatus).toBe('ON_TIME');
+  });
+
+  it('Scheduled order still Pending: milestone is PICKUP, using the slot-end deadline', async () => {
+    const { service } = await buildService({
+      _id: 'order-1',
+      userId: 'user-1',
+      status: 'ORDER_PLACED',
+      items: [{ category: 'scheduled' }],
+      pickupDate: new Date(),
+      pickupSlot: 'Evening',
+    });
+
+    const order = await service.findByIdAdmin('order-1');
+
+    expect(order.slaMilestone).toBe('PICKUP');
+    expect(order.slaDeadline).toBeDefined();
+  });
+
+  it('Scheduled order past pickup (PICKUP_ASSIGNED): milestone switches to DELIVERY', async () => {
+    const { service } = await buildService({
+      _id: 'order-1',
+      userId: 'user-1',
+      status: 'PICKUP_ASSIGNED',
+      items: [{ category: 'scheduled' }],
+      deliveryDate: new Date(Date.now() - 60 * 60 * 1000), // 1h ago — overdue
+    });
+
+    const order = await service.findByIdAdmin('order-1');
+
+    expect(order.slaMilestone).toBe('DELIVERY');
+    expect(order.slaStatus).toBe('OVERDUE');
+  });
+
+  it('Due Soon: within the configured threshold but not yet past deadline', async () => {
+    const { service } = await buildService({
+      _id: 'order-1',
+      userId: 'user-1',
+      status: 'PROCESSING',
+      items: [{ category: 'instant' }],
+      deliveryDate: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes from now, well under the 30-min default threshold
+    });
+
+    const order = await service.findByIdAdmin('order-1');
+
+    expect(order.slaStatus).toBe('DUE_SOON');
+  });
+
+  it('COMPLETED/CANCELLED orders have no active SLA', async () => {
+    const { service } = await buildService({
+      _id: 'order-1',
+      userId: 'user-1',
+      status: 'COMPLETED',
+      items: [{ category: 'instant' }],
+      deliveryDate: new Date(Date.now() - 60 * 60 * 1000),
+    });
+
+    const order = await service.findByIdAdmin('order-1');
+
+    expect(order.slaMilestone).toBeNull();
+    expect(order.slaDeadline).toBeNull();
+    expect(order.slaStatus).toBeNull();
   });
 });

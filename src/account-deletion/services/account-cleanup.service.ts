@@ -8,6 +8,8 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import { User, UserDocument } from '../../users/schemas/user.schema';
+import { Cart, CartDocument } from '../../cart/schemas/cart.schema';
+import { NotificationsService } from '../../notifications/notifications.service';
 import { AccountDeletionRepository } from '../repositories/account-deletion.repository';
 import {
   AccountStatus,
@@ -32,6 +34,9 @@ export class AccountCleanupService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    @InjectModel(Cart.name)
+    private readonly cartModel: Model<CartDocument>,
+    private readonly notificationsService: NotificationsService,
     private readonly repo: AccountDeletionRepository,
     private readonly configService: ConfigService,
   ) {}
@@ -97,6 +102,11 @@ export class AccountCleanupService implements OnModuleInit, OnModuleDestroy {
         $unset: { email: '', mobileNumber: '' },
       },
     );
+
+    // Convenience data with no legal retention need — remove entirely rather
+    // than anonymise (unlike orders/payments, which are kept for tax/audit).
+    await this.cartModel.deleteOne({ userId }).catch(() => undefined);
+    await this.notificationsService.deleteAllForUser(userId).catch(() => undefined);
 
     await this.repo.update(String(request._id), {
       status: DeleteRequestStatus.CLEANED,
