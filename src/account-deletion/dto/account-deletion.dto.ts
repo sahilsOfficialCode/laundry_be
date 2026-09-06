@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsEnum,
   IsInt,
   IsMongoId,
@@ -63,6 +64,17 @@ export class ConfirmDeleteDto {
   @IsOptional()
   @IsString()
   verificationToken?: string;
+
+  /**
+   * Explicit, informed consent to forfeit any remaining wallet balance so
+   * deletion can proceed. Required only when the account has a non-zero
+   * balance — the user must be able to complete deletion in-app without a
+   * withdrawal feature, so unspent balance is forfeited on request rather
+   * than permanently blocking the account from being deleted.
+   */
+  @IsOptional()
+  @IsBoolean()
+  forfeitWalletBalance?: boolean;
 }
 
 /** POST /account/delete/send-otp — request an OTP for OTP verification. */

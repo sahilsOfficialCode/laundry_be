@@ -20,6 +20,11 @@ import {
   AccountAuditLogSchema,
 } from './schemas/account-audit-log.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
+import {
+  WalletTransaction,
+  WalletTransactionSchema,
+} from '../wallet/schemas/wallet-transaction.schema';
+import { Cart, CartSchema } from '../cart/schemas/cart.schema';
 
 import { AuthModule } from '../auth/auth.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -35,6 +40,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
       { name: DeleteRequest.name, schema: DeleteRequestSchema },
       { name: AccountAuditLog.name, schema: AccountAuditLogSchema },
       { name: User.name, schema: UserSchema },
+      { name: WalletTransaction.name, schema: WalletTransactionSchema },
+      { name: Cart.name, schema: CartSchema },
     ]),
     AuthModule,
     NotificationsModule,

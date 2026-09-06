@@ -77,10 +77,25 @@ Admin (ADMIN role):
 | Payment records  | Profile photo |
 | GST invoices     | Saved addresses |
 | Tax records      | Device / FCM tokens |
-| Fraud & audit logs | Notification preferences |
+| Fraud & audit logs | Notification preferences, cart, notification history |
 
 The user document keeps its `_id` (so orders/invoices stay linkable for tax),
 but PII fields are unset/blanked and `accountStatus` becomes `ANONYMIZED`.
+Cart (`carts`) and in-app notification records (`app_notifications`) are
+deleted outright rather than anonymised — pure convenience data with no legal
+retention need.
+
+## Wallet balance
+
+There is no wallet withdrawal feature, so a non-zero balance can never be a
+dead end for deletion (Apple 5.1.1(v) requires the user be able to actually
+*complete* deletion in-app). `POST /account/delete/confirm` first responds
+`400 { code: 'WALLET_BALANCE_REMAINING', walletBalance }` if funds remain;
+retrying with `{ forfeitWalletBalance: true }` zeroes the balance, records a
+`DEBIT` wallet transaction ("forfeited on account deletion") for the ledger,
+and proceeds. The Flutter client surfaces this as an explicit forfeit-and-retry
+dialog rather than a generic error — see
+`lib/features/account_deletion/screens/delete_flow_helpers.dart`.
 
 ## "Logout from every device" (stateless JWT)
 
@@ -94,7 +109,7 @@ caller's current token is additionally blacklisted immediately.
 
 - `users/schemas/user.schema.ts` — soft-delete fields + `sessionsValidFrom`.
 - `users/users.service.ts` — `getAuthStatus()` lean lookup for the guard.
-- `auth/auth.service.ts` — `verifyOtpValue()` (verify OTP without login) + `assertAccountActive()` (+cache).
+- `auth/auth.service.ts` — `verifyOtpValue()` (verify OTP without login), `assertAccountActive()` (+cache), and `rejectIfDeleted()` so login/OTP/Firebase sign-in reject a soft-deleted account immediately instead of issuing a token that would fail on the very next request.
 - `auth/auth.module.ts` — export `FirebaseAdminService` (for Google/Apple re-auth).
 - `auth/guards/jwt-auth.guard.ts` — enforce deletion / logout-all.
 - `app.module.ts` — register `AccountDeletionModule`.

@@ -11,6 +11,13 @@ import { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { User, UserDocument } from '../../users/schemas/user.schema';
+import {
+  WalletTransaction,
+  WalletTransactionDocument,
+  WalletTxnCategory,
+  WalletTxnStatus,
+  WalletTxnType,
+} from '../../wallet/schemas/wallet-transaction.schema';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { TokenBlacklistService } from '../../auth/token-blacklist.service';
 import { AccountDeletionRepository } from '../repositories/account-deletion.repository';
@@ -50,6 +57,8 @@ export class AccountDeletionService {
   constructor(
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    @InjectModel(WalletTransaction.name)
+    private readonly walletTxnModel: Model<WalletTransactionDocument>,
     private readonly repo: AccountDeletionRepository,
     private readonly identityService: IdentityVerificationService,
     private readonly notifications: NotificationsService,
@@ -194,11 +203,17 @@ export class AccountDeletionService {
     if (!user) throw new NotFoundException('User not found');
     if (user.isDeleted) throw new ConflictException('Account already deleted');
 
-    // Wallet may only be removed when empty — block if funds remain.
-    if ((user.walletBalance ?? 0) > 0) {
-      throw new BadRequestException(
-        `Your wallet holds ₹${user.walletBalance}. Please spend or withdraw it before deleting your account.`,
-      );
+    // There is no wallet withdrawal feature, so a non-zero balance must never
+    // permanently block deletion (the user has to be able to complete it
+    // in-app). The first confirm attempt surfaces the balance and asks for
+    // explicit consent to forfeit it; only once given does deletion proceed.
+    const walletBalance = user.walletBalance ?? 0;
+    if (walletBalance > 0 && !dto.forfeitWalletBalance) {
+      throw new BadRequestException({
+        code: 'WALLET_BALANCE_REMAINING',
+        walletBalance,
+        message: `Your wallet holds ₹${walletBalance}. Spend it first, or confirm again to forfeit the remaining balance and continue deleting your account.`,
+      });
     }
 
     const now = new Date();
@@ -218,9 +233,31 @@ export class AccountDeletionService {
           deletedReason: request.reason,
           deletedReasonComment: request.comment ?? null,
           sessionsValidFrom: now, // invalidates all existing JWTs (all devices)
+          ...(walletBalance > 0 ? { walletBalance: 0 } : {}),
         },
       },
     );
+
+    if (walletBalance > 0) {
+      await this.walletTxnModel.create({
+        userId,
+        type: WalletTxnType.DEBIT,
+        amount: walletBalance,
+        description: 'Wallet balance forfeited on account deletion',
+        status: WalletTxnStatus.COMPLETED,
+        category: WalletTxnCategory.DEBIT,
+        openingBalance: walletBalance,
+        closingBalance: 0,
+        createdBy: 'SYSTEM',
+      });
+      await this.repo.writeAudit(AuditAction.WALLET_FORFEITED, userId, {
+        deleteRequestId: String(request._id),
+        actor: 'USER',
+        ipAddress: ctx.ipAddress,
+        message: `Wallet balance of ₹${walletBalance} forfeited on account deletion`,
+        meta: { walletBalance },
+      });
+    }
 
     // Clear FCM/device tokens so no more pushes are sent.
     await this.notifications.removeAllTokens(userId).catch(() => undefined);
