@@ -68,7 +68,15 @@ export class UsersService {
   private async createUser(createUserDto: CreateUserDto): Promise<any> {
     const { email, password, name } = createUserDto;
 
-    const existingUser = await this.userModel.findOne({ email });
+    // Only a *live* account may hold an email. A permanently-deleted account
+    // has its identifiers released by AccountDeletionService.executeDeletion(),
+    // so this normally sees nothing; the `isDeleted` guard is the safety net
+    // for any legacy deleted row that still carries an email until the
+    // migration runs (scripts/free-deleted-account-identifiers.ts).
+    const existingUser = await this.userModel.findOne({
+      email,
+      isDeleted: { $ne: true },
+    });
     if (existingUser) {
       throw new ConflictException('Email already in use');
     }

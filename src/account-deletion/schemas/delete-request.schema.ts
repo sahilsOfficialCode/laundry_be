@@ -81,3 +81,31 @@ export const DeleteRequestSchema = SchemaFactory.createForClass(DeleteRequest);
 // Common admin queries.
 DeleteRequestSchema.index({ status: 1, createdAt: -1 });
 DeleteRequestSchema.index({ status: 1, retentionUntil: 1 }); // cleanup job
+
+// At most ONE non-terminal (open) request per user — the DB-level guarantee
+// behind "only one deletion request is created" even under concurrent taps.
+// The partial filter means a request automatically leaves the constraint once
+// it reaches a terminal status (COMPLETED / CLEANED / REJECTED / CANCELLED),
+// so the user can request again later. Concurrent creators race on this index:
+// one insert wins, the rest get E11000 and are folded into the winner by
+// AccountDeletionService.requestDelete().
+DeleteRequestSchema.index(
+  { userId: 1 },
+  {
+    // Explicit name so this does NOT collide with the plain `userId` index
+    // that the @Prop({ index: true }) above already registers as "userId_1"
+    // (same key → auto-name clash → the partial index would be silently
+    // dropped at startup otherwise).
+    name: 'uniq_open_delete_request_per_user',
+    unique: true,
+    partialFilterExpression: {
+      status: {
+        $in: [
+          DeleteRequestStatus.PENDING_VERIFICATION,
+          DeleteRequestStatus.VERIFIED,
+          DeleteRequestStatus.PENDING_APPROVAL,
+        ],
+      },
+    },
+  },
+);

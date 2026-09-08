@@ -73,7 +73,9 @@ describe('AccountDeletionService', () => {
           lean: jest.fn().mockResolvedValue(userModel._doc),
         }),
       })),
-      updateOne: jest.fn().mockResolvedValue({ acknowledged: true }),
+      updateOne: jest
+        .fn()
+        .mockResolvedValue({ acknowledged: true, modifiedCount: 1 }),
     };
     repo = {
       findActiveByUser: jest.fn().mockResolvedValue(null),
@@ -219,15 +221,23 @@ describe('AccountDeletionService', () => {
     const res = await service.executeApprovedDeletion('req1', 'admin1');
 
     expect(res.status).toBe(AccountStatus.DELETED);
-    // account soft-deleted + all sessions invalidated
+    // account soft-deleted + all sessions invalidated, guarded so a replay
+    // modifies nothing (isDeleted != true), and the unique identifiers +
+    // credentials are released immediately (not deferred to the cleanup cron).
     expect(userModel.updateOne).toHaveBeenCalledWith(
-      { _id: 'u1' },
+      { _id: 'u1', isDeleted: { $ne: true } },
       expect.objectContaining({
         $set: expect.objectContaining({
           isDeleted: true,
           isActive: false,
           accountStatus: AccountStatus.DELETED,
           sessionsValidFrom: expect.any(Date),
+          walletBalance: 0,
+        }),
+        $unset: expect.objectContaining({
+          email: '',
+          mobileNumber: '',
+          password: '',
         }),
       }),
     );
@@ -245,6 +255,33 @@ describe('AccountDeletionService', () => {
     expect(authService.clearAccountStatusCache).toHaveBeenCalledWith('u1');
     // no user token on the admin path
     expect(tokenBlacklist.revoke).not.toHaveBeenCalled();
+  });
+
+  it('executeDeletion is idempotent: a replay (0 rows modified) forfeits no wallet again and sends no second notification, but still drives the request to COMPLETED', async () => {
+    userModel._doc = mkUser({ walletBalance: 500 });
+    userModel.updateOne.mockResolvedValueOnce({
+      acknowledged: true,
+      modifiedCount: 0, // already deleted by a prior (partially-failed) run
+    });
+    repo.findById.mockResolvedValue({
+      _id: 'req1',
+      userId: 'u1',
+      status: DeleteRequestStatus.PENDING_APPROVAL,
+      reason: DeleteReason.OTHER,
+      comment: null,
+      userEmail: 'jane@example.com',
+      userMobile: '+919999999999',
+    });
+    const walletModel = (service as any).walletTxnModel;
+
+    await service.executeApprovedDeletion('req1', 'admin1');
+
+    expect(walletModel.create).not.toHaveBeenCalled(); // no double forfeit
+    expect(notifications.sendToUser).not.toHaveBeenCalled(); // no second notice
+    expect(repo.update).toHaveBeenCalledWith(
+      'req1',
+      expect.objectContaining({ status: DeleteRequestStatus.COMPLETED }),
+    );
   });
 
   // ── getStatus ────────────────────────────────────────────────────────────

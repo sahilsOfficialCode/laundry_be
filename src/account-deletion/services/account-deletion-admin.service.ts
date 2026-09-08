@@ -124,9 +124,16 @@ export class AccountDeletionAdminService {
   async reject(deleteRequestId: string, reason: string, adminId: string) {
     const request = await this.repo.findById(deleteRequestId);
     if (!request) throw new NotFoundException('Delete request not found');
-    if (request.status === DeleteRequestStatus.CLEANED) {
-      throw new NotFoundException(
-        'Data already anonymised; account cannot be restored',
+    // Rejection = "decline a pending request and keep the account". Once
+    // executeDeletion() has run (COMPLETED, or CLEANED afterwards) the account
+    // is permanently deleted — identifiers released, sessions revoked, wallet
+    // forfeited — and must never be restorable.
+    if (
+      request.status === DeleteRequestStatus.COMPLETED ||
+      request.status === DeleteRequestStatus.CLEANED
+    ) {
+      throw new BadRequestException(
+        'This account has already been permanently deleted and cannot be restored.',
       );
     }
 

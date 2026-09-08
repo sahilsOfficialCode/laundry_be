@@ -23,6 +23,7 @@
     "backfill:service-order-placed-messages": "ts-node -r tsconfig-paths/register scripts/backfill-service-order-placed-messages.ts",
     "backfill:service-durations": "ts-node -r tsconfig-paths/register scripts/backfill-service-durations.ts",
     "backfill:invoices-for-paid-orders": "ts-node -r tsconfig-paths/register scripts/backfill-invoices-for-paid-orders.ts",
+    "migrate:free-deleted-account-identifiers": "ts-node -r tsconfig-paths/register scripts/free-deleted-account-identifiers.ts",
     "test:webhook": "ts-node -r tsconfig-paths/register scripts/test-webhook.ts"
   },
   "dependencies": {
