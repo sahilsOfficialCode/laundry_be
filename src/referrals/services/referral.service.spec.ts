@@ -13,7 +13,7 @@ import { ReferralRewardService } from './referral-reward.service';
 import { ReferralRepository } from '../repositories/referral.repository';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { User } from '../../users/schemas/user.schema';
-import { ReferralStatus } from '../enums/referral.enums';
+import { ReferralStatus, RewardStatus } from '../enums/referral.enums';
 
 describe('ReferralService', () => {
   let service: ReferralService;
@@ -268,6 +268,275 @@ describe('ReferralService', () => {
     it('returns false for never-referred users', async () => {
       repo.findReferralByReferee.mockResolvedValue(null);
       await expect(service.hasReferrer('me')).resolves.toBe(false);
+    });
+  });
+
+  describe('refereeRewardApplies', () => {
+    it('is false when the user was never referred', async () => {
+      repo.findReferralByReferee.mockResolvedValue(null);
+      await expect(service.refereeRewardApplies('me')).resolves.toBe(false);
+    });
+
+    it('is true while the referral can still pay out', async () => {
+      repo.findReferralByReferee.mockResolvedValue({
+        status: ReferralStatus.REGISTERED,
+      } as any);
+      await expect(service.refereeRewardApplies('me')).resolves.toBe(true);
+    });
+
+    it('is false for rejected / expired referrals (they get the ordinary discount)', async () => {
+      repo.findReferralByReferee.mockResolvedValue({
+        status: ReferralStatus.REJECTED,
+      } as any);
+      await expect(service.refereeRewardApplies('me')).resolves.toBe(false);
+
+      repo.findReferralByReferee.mockResolvedValue({
+        status: ReferralStatus.EXPIRED,
+      } as any);
+      await expect(service.refereeRewardApplies('me')).resolves.toBe(false);
+    });
+  });
+
+  describe('handleQualifyingOrder', () => {
+    const rewardSettings = { ...settings, minimumOrderValue: 50 };
+    const paidOrder = {
+      _id: 'o1',
+      status: 'COMPLETED',
+      paymentStatus: 'COMPLETED',
+      billAmount: 349,
+      firstOrderDiscountAmount: 0,
+    };
+
+    function makeReferralDoc(over: Record<string, any> = {}) {
+      const doc: any = {
+        _id: 'r1',
+        referrerId: 'REF',
+        refereeId: 'FRIEND',
+        status: ReferralStatus.REGISTERED,
+        qualifyingOrderId: undefined,
+        firstOrderAt: null,
+        ...over,
+      };
+      doc.save = jest.fn().mockResolvedValue(doc);
+      return doc;
+    }
+
+    async function build(mocks: {
+      referralDoc: any;
+      rewardsByReferral: jest.Mock;
+      releaseRewards?: jest.Mock;
+      createPendingRewards?: jest.Mock;
+    }) {
+      const repoMock = {
+        findReferralByReferee: jest.fn().mockResolvedValue(mocks.referralDoc),
+        findRewardsByReferral: mocks.rewardsByReferral,
+        findReferralsWithPendingRewards: jest.fn().mockResolvedValue([]),
+        writeLog: jest.fn().mockResolvedValue(undefined),
+      };
+      const rewardService = {
+        createPendingRewards:
+          mocks.createPendingRewards ?? jest.fn().mockResolvedValue(undefined),
+        releaseRewards: mocks.releaseRewards ?? jest.fn().mockResolvedValue(0),
+      };
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          ReferralService,
+          { provide: getModelToken(User.name), useValue: userModel },
+          { provide: ReferralRepository, useValue: repoMock },
+          {
+            provide: ReferralSettingsService,
+            useValue: { get: jest.fn().mockResolvedValue(rewardSettings) },
+          },
+          { provide: FraudDetectionService, useValue: fraud },
+          { provide: ReferralRewardService, useValue: rewardService },
+          { provide: NotificationsService, useValue: notifications },
+        ],
+      }).compile();
+      return {
+        svc: module.get<ReferralService>(ReferralService),
+        rewardService,
+      };
+    }
+
+    it('first pass: records the milestone, passes the discount as refereeAlreadyCredited, releases and finalizes', async () => {
+      const referralDoc = makeReferralDoc();
+      const rewardsByReferral = jest
+        .fn()
+        .mockResolvedValueOnce([
+          { beneficiaryType: 'REFERRER', status: RewardStatus.PENDING, amount: 100 },
+          { beneficiaryType: 'REFEREE', status: RewardStatus.PENDING, amount: 50 },
+        ])
+        .mockResolvedValue([
+          { beneficiaryType: 'REFERRER', status: RewardStatus.RELEASED, amount: 100 },
+          { beneficiaryType: 'REFEREE', status: RewardStatus.RELEASED, amount: 50 },
+        ]);
+      const releaseRewards = jest.fn().mockResolvedValue(150);
+      const { svc, rewardService } = await build({
+        referralDoc,
+        rewardsByReferral,
+        releaseRewards,
+      });
+
+      await svc.handleQualifyingOrder('FRIEND', {
+        ...paidOrder,
+        firstOrderDiscountAmount: 0,
+      });
+
+      expect(rewardService.createPendingRewards).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        { refereeAlreadyCredited: 0 },
+      );
+      expect(releaseRewards).toHaveBeenCalledWith('r1', 'SYSTEM');
+      expect(referralDoc.status).toBe(ReferralStatus.REWARD_RELEASED);
+    });
+
+    it('retry pass: a half-released referral gets its still-PENDING referee reward released without re-notifying the referrer', async () => {
+      const referralDoc = makeReferralDoc({
+        status: ReferralStatus.PAYMENT_COMPLETED,
+        qualifyingOrderId: 'o1',
+      });
+      const rewardsByReferral = jest
+        .fn()
+        .mockResolvedValueOnce([
+          { beneficiaryType: 'REFERRER', status: RewardStatus.RELEASED, amount: 100 },
+          { beneficiaryType: 'REFEREE', status: RewardStatus.PENDING, amount: 50 },
+        ])
+        .mockResolvedValue([
+          { beneficiaryType: 'REFERRER', status: RewardStatus.RELEASED, amount: 100 },
+          { beneficiaryType: 'REFEREE', status: RewardStatus.RELEASED, amount: 50 },
+        ]);
+      const releaseRewards = jest.fn().mockResolvedValue(50);
+      const { svc, rewardService } = await build({
+        referralDoc,
+        rewardsByReferral,
+        releaseRewards,
+      });
+
+      await svc.handleQualifyingOrder('FRIEND', paidOrder);
+
+      expect(rewardService.createPendingRewards).not.toHaveBeenCalled();
+      expect(releaseRewards).toHaveBeenCalledWith('r1', 'SYSTEM');
+      expect(referralDoc.status).toBe(ReferralStatus.REWARD_RELEASED);
+      expect(notifications.sendToUser).toHaveBeenCalledTimes(1);
+      expect(notifications.sendToUser).toHaveBeenCalledWith(
+        'FRIEND',
+        expect.objectContaining({ type: 'referral_reward_released' }),
+      );
+    });
+
+    it('retry pass with nothing pending is a no-op (no release attempted)', async () => {
+      const referralDoc = makeReferralDoc({
+        status: ReferralStatus.REWARD_RELEASED,
+        qualifyingOrderId: 'o1',
+      });
+      const rewardsByReferral = jest.fn().mockResolvedValue([
+        { beneficiaryType: 'REFERRER', status: RewardStatus.RELEASED, amount: 100 },
+        { beneficiaryType: 'REFEREE', status: RewardStatus.RELEASED, amount: 50 },
+      ]);
+      const releaseRewards = jest.fn().mockResolvedValue(0);
+      const { svc } = await build({
+        referralDoc,
+        rewardsByReferral,
+        releaseRewards,
+      });
+
+      await svc.handleQualifyingOrder('FRIEND', paidOrder);
+
+      expect(releaseRewards).not.toHaveBeenCalled();
+    });
+
+    it('leaves the referral in PAYMENT_COMPLETED when a reward is still PENDING after release', async () => {
+      const referralDoc = makeReferralDoc();
+      const rewardsByReferral = jest
+        .fn()
+        .mockResolvedValueOnce([
+          { beneficiaryType: 'REFERRER', status: RewardStatus.PENDING, amount: 100 },
+          { beneficiaryType: 'REFEREE', status: RewardStatus.PENDING, amount: 50 },
+        ])
+        .mockResolvedValue([
+          { beneficiaryType: 'REFERRER', status: RewardStatus.RELEASED, amount: 100 },
+          { beneficiaryType: 'REFEREE', status: RewardStatus.PENDING, amount: 50 },
+        ]);
+      const { svc } = await build({
+        referralDoc,
+        rewardsByReferral,
+        releaseRewards: jest.fn().mockResolvedValue(100),
+      });
+
+      await svc.handleQualifyingOrder('FRIEND', paidOrder);
+
+      expect(referralDoc.status).toBe(ReferralStatus.PAYMENT_COMPLETED);
+    });
+  });
+
+  describe('reconcileStrandedRewards', () => {
+    it('retries release for every referral that still has a pending reward', async () => {
+      const stranded: any = {
+        _id: 'r1',
+        referrerId: 'REF',
+        refereeId: 'FRIEND',
+        status: ReferralStatus.PAYMENT_COMPLETED,
+      };
+      stranded.save = jest.fn().mockResolvedValue(stranded);
+
+      const repoMock = {
+        findReferralsWithPendingRewards: jest.fn().mockResolvedValue([stranded]),
+        findRewardsByReferral: jest
+          .fn()
+          .mockResolvedValueOnce([
+            { beneficiaryType: 'REFEREE', status: RewardStatus.PENDING, amount: 50 },
+          ])
+          .mockResolvedValue([
+            { beneficiaryType: 'REFEREE', status: RewardStatus.RELEASED, amount: 50 },
+          ]),
+        writeLog: jest.fn().mockResolvedValue(undefined),
+      };
+      const releaseRewards = jest.fn().mockResolvedValue(50);
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          ReferralService,
+          { provide: getModelToken(User.name), useValue: userModel },
+          { provide: ReferralRepository, useValue: repoMock },
+          {
+            provide: ReferralSettingsService,
+            useValue: { get: jest.fn().mockResolvedValue(settings) },
+          },
+          { provide: FraudDetectionService, useValue: fraud },
+          {
+            provide: ReferralRewardService,
+            useValue: { releaseRewards, createPendingRewards: jest.fn() },
+          },
+          { provide: NotificationsService, useValue: notifications },
+        ],
+      }).compile();
+      const svc = module.get<ReferralService>(ReferralService);
+
+      const settled = await svc.reconcileStrandedRewards();
+
+      expect(releaseRewards).toHaveBeenCalledWith('r1', 'SYSTEM');
+      expect(settled).toBe(1);
+      expect(stranded.status).toBe(ReferralStatus.REWARD_RELEASED);
+    });
+
+    it('returns 0 without work when nothing is stranded', async () => {
+      const repoMock = {
+        findReferralsWithPendingRewards: jest.fn().mockResolvedValue([]),
+      };
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          ReferralService,
+          { provide: getModelToken(User.name), useValue: userModel },
+          { provide: ReferralRepository, useValue: repoMock },
+          { provide: ReferralSettingsService, useValue: { get: jest.fn() } },
+          { provide: FraudDetectionService, useValue: fraud },
+          { provide: ReferralRewardService, useValue: {} },
+          { provide: NotificationsService, useValue: notifications },
+        ],
+      }).compile();
+      const svc = module.get<ReferralService>(ReferralService);
+
+      await expect(svc.reconcileStrandedRewards()).resolves.toBe(0);
     });
   });
 });

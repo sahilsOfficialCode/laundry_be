@@ -17,8 +17,11 @@ import { ReferralRewardService } from './referral-reward.service';
 import {
   ReferralLogAction,
   ReferralStatus,
+  RewardBeneficiary,
   RewardStatus,
 } from '../enums/referral.enums';
+import { ReferralDocument } from '../schemas/referral.schema';
+import { ReferralSettings } from '../schemas/referral-settings.schema';
 import { ApplyReferralDto } from '../dto/apply-referral.dto';
 import { ReferralContext, ReferralHistoryItem } from '../types/referral.types';
 import {
@@ -77,6 +80,22 @@ export class ReferralService {
   async hasReferrer(userId: string): Promise<boolean> {
     const existing = await this.repo.findReferralByReferee(userId);
     return Boolean(existing);
+  }
+
+  /**
+   * True when this user was referred and their referee welcome bonus is still
+   * live — i.e. the referral programme (wallet credit on the first qualifying
+   * order) is the channel for their ₹X, so OrdersService must NOT also hand
+   * them the generic first-order discount off the bill. Referrals that can no
+   * longer pay out (REJECTED / EXPIRED) return false, so those users still get
+   * the ordinary first-order discount like any other new customer.
+   */
+  async refereeRewardApplies(userId: string): Promise<boolean> {
+    const referral = await this.repo.findReferralByReferee(userId);
+    if (!referral) return false;
+    return ![ReferralStatus.REJECTED, ReferralStatus.EXPIRED].includes(
+      referral.status,
+    );
   }
 
   // ── First-order incentive (checkout-time discount) ─────────────────────────
@@ -331,6 +350,12 @@ export class ReferralService {
   /**
    * Called when a referee's order reaches a terminal, paid, delivered state.
    * Applies the reward conditions and, if met, releases the reward.
+   *
+   * If the referral already qualified on an earlier call, this does NOT re-run
+   * the milestone — but it DOES retry any reward that is still stuck PENDING
+   * (e.g. a previous run credited the referrer and then died before the
+   * referee's credit landed). That retry is what stops a half-released
+   * referral from stranding the referee's welcome bonus forever.
    */
   async handleQualifyingOrder(
     refereeId: string,
@@ -340,26 +365,35 @@ export class ReferralService {
       paymentStatus: string;
       billAmount?: number;
       totalAmount?: number;
-      /** Set when the referee already got their welcome bonus as an instant
-       *  checkout-time discount on this order — skip crediting it again. */
+      /** How much of the referee's welcome bonus was already given as an
+       *  instant checkout-time discount on this order — credited-amount aware,
+       *  so only the remainder (if any) becomes a wallet reward. */
       firstOrderDiscountAmount?: number;
     },
   ): Promise<void> {
     const referral = await this.repo.findReferralByReferee(refereeId);
     if (!referral) return; // user wasn't referred
-    if (referral.qualifyingOrderId) return; // already qualified once
     if (
-      [
-        ReferralStatus.REWARD_RELEASED,
-        ReferralStatus.REJECTED,
-        ReferralStatus.EXPIRED,
-      ].includes(referral.status)
+      [ReferralStatus.REJECTED, ReferralStatus.EXPIRED].includes(referral.status)
     ) {
       return;
     }
 
-    // ── Reward conditions ─────────────────────────────────────────────────
     const settings = await this.settingsService.get();
+
+    // Already qualified (or already released, e.g. via an admin action that
+    // doesn't stamp qualifyingOrderId) — don't re-run the milestone or create
+    // a second set of reward records; just finish releasing anything that is
+    // somehow still pending.
+    if (
+      referral.qualifyingOrderId ||
+      referral.status === ReferralStatus.REWARD_RELEASED
+    ) {
+      await this.releaseAndFinalize(referral, settings, { retryOnly: true });
+      return;
+    }
+
+    // ── Reward conditions ─────────────────────────────────────────────────
     const orderValue = order.billAmount ?? order.totalAmount ?? 0;
     const delivered = order.status === 'COMPLETED';
     const paid = order.paymentStatus === 'COMPLETED';
@@ -383,30 +417,141 @@ export class ReferralService {
 
     // Create the reward records now that we know the order value (for %).
     await this.rewardService.createPendingRewards(referral as any, settings, {
-      skipRefereeReward: (order.firstOrderDiscountAmount ?? 0) > 0,
+      refereeAlreadyCredited: order.firstOrderDiscountAmount ?? 0,
     });
 
-    // Release immediately (all conditions met). Admins can also gate this.
+    await this.releaseAndFinalize(referral, settings, { retryOnly: false });
+  }
+
+  /**
+   * Release every still-PENDING reward for a referral and, only once nothing
+   * remains pending, flip the referral to REWARD_RELEASED. Notifies each side
+   * whose reward actually moved PENDING → RELEASED in this call (so a retry
+   * that only finishes the referee's credit doesn't re-notify the referrer).
+   *
+   * Safe to call repeatedly — releaseRewards() skips rewards already RELEASED.
+   */
+  private async releaseAndFinalize(
+    referral: ReferralDocument,
+    settings: ReferralSettings,
+    opts: { retryOnly: boolean },
+  ): Promise<void> {
+    const referralId = String(referral._id);
+
+    const before = await this.repo.findRewardsByReferral(referralId);
+    const wasPending = new Set<RewardBeneficiary>(
+      before
+        .filter((r) => r.status === RewardStatus.PENDING)
+        .map((r) => r.beneficiaryType),
+    );
+    if (wasPending.size === 0) {
+      // Nothing pending. Reconcile the referral status in case a prior partial
+      // run released every reward but never flipped it to REWARD_RELEASED.
+      await this.markReleasedIfComplete(referral, before);
+      return;
+    }
+    if (opts.retryOnly) {
+      this.logger.warn(
+        `Referral ${referralId}: retrying ${wasPending.size} stranded PENDING reward(s)`,
+      );
+    }
+
     const credited = await this.rewardService.releaseRewards(
-      String(referral._id),
+      referralId,
       'SYSTEM',
     );
 
-    referral.status = ReferralStatus.REWARD_RELEASED;
-    referral.rewardReleasedAt = new Date();
-    await referral.save();
+    const after = await this.repo.findRewardsByReferral(referralId);
+    const referrerReward = after.find(
+      (r) => r.beneficiaryType === RewardBeneficiary.REFERRER,
+    );
+    const refereeReward = after.find(
+      (r) => r.beneficiaryType === RewardBeneficiary.REFEREE,
+    );
 
-    // Notify both sides.
-    await this.notify(referral.referrerId, settings, {
-      title: 'Referral reward credited! 💰',
-      body: `₹${credited} has been added to your wallet.`,
-      type: 'referral_reward_released',
-    });
-    await this.notify(referral.refereeId, settings, {
-      title: 'Welcome bonus credited! 🎁',
-      body: 'Your referral welcome reward is now in your wallet.',
-      type: 'referral_reward_released',
-    });
+    if (
+      wasPending.has(RewardBeneficiary.REFERRER) &&
+      referrerReward?.status === RewardStatus.RELEASED
+    ) {
+      await this.notify(referral.referrerId, settings, {
+        title: 'Referral reward credited! 💰',
+        body: `₹${referrerReward.amount} has been added to your wallet.`,
+        type: 'referral_reward_released',
+      });
+    }
+    if (
+      wasPending.has(RewardBeneficiary.REFEREE) &&
+      refereeReward?.status === RewardStatus.RELEASED
+    ) {
+      await this.notify(referral.refereeId, settings, {
+        title: 'Welcome bonus credited! 🎁',
+        body: `₹${refereeReward.amount} has been added to your wallet.`,
+        type: 'referral_reward_released',
+      });
+    }
+
+    if (after.some((r) => r.status === RewardStatus.PENDING)) {
+      // A credit still didn't land. Leave the referral in PAYMENT_COMPLETED so
+      // the next qualifying-order hook or the reconcile sweep retries it —
+      // don't claim REWARD_RELEASED.
+      this.logger.error(
+        `Referral ${referralId}: ${
+          credited ? `credited ₹${credited}, but ` : ''
+        }reward(s) still PENDING after release — will retry`,
+      );
+      return;
+    }
+
+    await this.markReleasedIfComplete(referral, after);
+  }
+
+  /** Flip a fully-released referral to REWARD_RELEASED (idempotent). */
+  private async markReleasedIfComplete(
+    referral: ReferralDocument,
+    rewards: Array<{ status: RewardStatus }>,
+  ): Promise<void> {
+    const complete =
+      rewards.length > 0 &&
+      rewards.every((r) => r.status !== RewardStatus.PENDING);
+    if (!complete) return;
+    if (referral.status === ReferralStatus.REWARD_RELEASED) return;
+    referral.status = ReferralStatus.REWARD_RELEASED;
+    referral.rewardReleasedAt = referral.rewardReleasedAt ?? new Date();
+    await referral.save();
+  }
+
+  /**
+   * Safety-net sweep: finish releasing referral rewards that qualified but
+   * whose wallet credit only partially landed (referrer paid, process died
+   * before the referee's credit, transient DB error, ...). Idempotent and
+   * cheap when there's nothing stranded. Returns how many referrals it fully
+   * settled this run.
+   */
+  async reconcileStrandedRewards(limit = 100): Promise<number> {
+    const referrals = await this.repo.findReferralsWithPendingRewards(limit);
+    if (referrals.length === 0) return 0;
+
+    const settings = await this.settingsService.get();
+    let settled = 0;
+    for (const referral of referrals) {
+      try {
+        await this.releaseAndFinalize(referral, settings, { retryOnly: true });
+        const stillPending = (
+          await this.repo.findRewardsByReferral(String(referral._id))
+        ).some((r) => r.status === RewardStatus.PENDING);
+        if (!stillPending) settled++;
+      } catch (e) {
+        this.logger.error(
+          `reconcileStrandedRewards: referral ${String(referral._id)} failed: ${
+            (e as Error).message
+          }`,
+        );
+      }
+    }
+    this.logger.log(
+      `reconcileStrandedRewards: ${settled}/${referrals.length} referral(s) settled`,
+    );
+    return settled;
   }
 
   // ── GET /referral/history ──────────────────────────────────────────────────

@@ -7,6 +7,7 @@ import { AdminReferralController } from './admin-referral.controller';
 import { ReferralService } from './services/referral.service';
 import { ReferralSettingsService } from './services/referral-settings.service';
 import { ReferralRewardService } from './services/referral-reward.service';
+import { ReferralReconciliationService } from './services/referral-reconciliation.service';
 import { FraudDetectionService } from './services/fraud-detection.service';
 import { ReferralAnalyticsService } from './services/referral-analytics.service';
 import { ReferralRepository } from './repositories/referral.repository';
@@ -65,6 +66,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     ReferralService,
     ReferralSettingsService,
     ReferralRewardService,
+    ReferralReconciliationService,
     FraudDetectionService,
     ReferralAnalyticsService,
     ReferralThrottleGuard,

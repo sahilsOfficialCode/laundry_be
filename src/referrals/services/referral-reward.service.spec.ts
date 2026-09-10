@@ -195,6 +195,48 @@ describe('ReferralRewardService', () => {
     });
   });
 
+  describe('createPendingRewards', () => {
+    const referral = {
+      _id: 'ref1',
+      referrerId: 'R',
+      refereeId: 'E',
+      firstOrderValue: 349,
+    } as any;
+
+    const typesCreated = () =>
+      repo.createReward.mock.calls.map((c: any[]) => c[0].beneficiaryType);
+
+    it('creates full referrer + referee rewards when nothing was pre-credited', async () => {
+      await service.createPendingRewards(referral, settings);
+
+      expect(repo.createReward).toHaveBeenCalledWith(
+        expect.objectContaining({ beneficiaryType: 'REFERRER', amount: 100 }),
+      );
+      expect(repo.createReward).toHaveBeenCalledWith(
+        expect.objectContaining({ beneficiaryType: 'REFEREE', amount: 50 }),
+      );
+    });
+
+    it('reduces the referee reward by the amount already given off the bill', async () => {
+      await service.createPendingRewards(referral, settings, {
+        refereeAlreadyCredited: 20,
+      });
+
+      expect(repo.createReward).toHaveBeenCalledWith(
+        expect.objectContaining({ beneficiaryType: 'REFEREE', amount: 30 }),
+      );
+    });
+
+    it('skips the referee reward only when the discount fully covered it', async () => {
+      await service.createPendingRewards(referral, settings, {
+        refereeAlreadyCredited: 50,
+      });
+
+      expect(typesCreated()).toContain('REFERRER');
+      expect(typesCreated()).not.toContain('REFEREE');
+    });
+  });
+
   describe('reverseRewards', () => {
     it('debits released rewards and marks them reversed', async () => {
       const reward = makeReward({ status: RewardStatus.RELEASED });

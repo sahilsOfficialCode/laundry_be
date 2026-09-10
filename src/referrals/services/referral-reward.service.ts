@@ -65,18 +65,21 @@ export class ReferralRewardService {
   /**
    * Create PENDING reward records (referrer + optional referee) for a referral.
    *
-   * `skipRefereeReward` — set when the referee already got their welcome bonus
-   * as an instant checkout-time discount on this same order (see
-   * OrdersService.resolveFirstOrderDiscount, which draws on the very same
-   * refereeRewardAmount/minimumOrderValue/maximumReferralReward settings).
-   * Without this the referee would be paid twice for one first order: once
-   * off the bill, once again into their wallet. The referrer's own reward is
-   * unaffected — they still earn it normally.
+   * `refereeAlreadyCredited` — how much of the referee's welcome bonus they
+   * already received as an instant checkout-time discount on this same first
+   * order (OrdersService.resolveFirstOrderDiscount). Only the remainder, if
+   * any, is turned into a wallet reward — so the referee is never paid twice,
+   * and (unlike the old all-or-nothing skip) a *partial* discount no longer
+   * silently swallows the whole bonus. The referrer's own reward is unaffected.
+   *
+   * Note: with the current settings the first-order discount is suppressed
+   * entirely for referred users (see OrdersService), so this is normally 0 —
+   * it's kept as a defence-in-depth guard against ever double-paying.
    */
   async createPendingRewards(
     referral: Referral & { _id: any },
     settings: ReferralSettings,
-    opts: { skipRefereeReward?: boolean } = {},
+    opts: { refereeAlreadyCredited?: number } = {},
   ): Promise<void> {
     const referralId = String(referral._id);
 
@@ -96,15 +99,20 @@ export class ReferralRewardService {
       });
     }
 
-    if (settings.refereeRewardAmount > 0 && !opts.skipRefereeReward) {
-      await this.repo.createReward({
-        referralId,
-        beneficiaryId: referral.refereeId,
-        beneficiaryType: RewardBeneficiary.REFEREE,
-        rewardType: settings.rewardType,
-        amount: settings.refereeRewardAmount,
-        status: RewardStatus.PENDING,
-      });
+    if (settings.refereeRewardAmount > 0) {
+      const alreadyCredited = Math.max(0, opts.refereeAlreadyCredited ?? 0);
+      const remaining =
+        Math.round((settings.refereeRewardAmount - alreadyCredited) * 100) / 100;
+      if (remaining > 0) {
+        await this.repo.createReward({
+          referralId,
+          beneficiaryId: referral.refereeId,
+          beneficiaryType: RewardBeneficiary.REFEREE,
+          rewardType: settings.rewardType,
+          amount: remaining,
+          status: RewardStatus.PENDING,
+        });
+      }
     }
   }
 

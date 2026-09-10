@@ -1176,6 +1176,14 @@ export class OrdersService {
     });
     if (hasCompletedOrder) return 0;
 
+    // A referred user receives this same ₹X as their referral welcome bonus,
+    // credited to their wallet once their first order qualifies — don't also
+    // hand it to them off the bill. (Rejected/expired referrals fall through
+    // and still get the ordinary first-order discount.) Previously the bill
+    // discount was applied AND the wallet bonus then silently skipped, so a
+    // referred friend saw no wallet credit at all.
+    if (await this.referralService.refereeRewardApplies(userId)) return 0;
+
     let discount = config.rewardAmount;
     if (config.maxCap > 0) discount = Math.min(discount, config.maxCap);
     discount = Math.min(discount, billAmount);

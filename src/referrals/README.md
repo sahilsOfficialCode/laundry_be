@@ -120,6 +120,11 @@ plus routes and a sidebar "Refer & Earn" group.
   right after registration with the pending code + device fingerprint.
 - **Expiry job:** schedule `ReferralService.expireStaleReferrals()` (e.g. `@nestjs/schedule`
   daily cron) to move stale referrals to `EXPIRED`.
+- **Stranded-reward sweep:** `ReferralReconciliationService` (registered in
+  `ReferralModule`) runs `ReferralService.reconcileStrandedRewards()` every 15
+  minutes + at bootstrap, finishing any reward release that only partially
+  landed (referrer credited, referee left `PENDING`). Toggle with
+  `REFERRAL_RECONCILIATION_ENABLED=false`.
 - **Emulator/VPN signals:** populate `isEmulator` / `isVpn` from a device
   integrity SDK on the client; the backend already consumes them.
 - **Coupon/points/free-delivery rewards** are recorded and released, but their

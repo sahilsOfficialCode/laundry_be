@@ -126,6 +126,30 @@ export class ReferralRepository {
     return this.rewardModel.find({ referralId });
   }
 
+  /**
+   * Referrals that qualified (milestone reached) yet still have at least one
+   * reward stuck PENDING — i.e. a reward release that only partially landed.
+   * Used by ReferralService.reconcileStrandedRewards().
+   */
+  async findReferralsWithPendingRewards(limit = 100) {
+    const raw = await this.rewardModel.distinct('referralId', {
+      status: RewardStatus.PENDING,
+    });
+    const referralIds = raw.map((id) => String(id));
+    if (referralIds.length === 0) return [];
+    return this.referralModel
+      .find({
+        _id: { $in: referralIds },
+        status: {
+          $in: [
+            ReferralStatus.PAYMENT_COMPLETED,
+            ReferralStatus.REWARD_RELEASED,
+          ],
+        },
+      })
+      .limit(limit);
+  }
+
   findRewardById(id: string) {
     return this.rewardModel.findById(id);
   }
